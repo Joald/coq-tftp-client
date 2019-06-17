@@ -2,8 +2,8 @@
 
 open Unix
 open Printf
-open client
-open packet
+(*open client
+  open packet*)
 
 (* Auxiliary definitions *)
 
@@ -19,21 +19,25 @@ let char_to_nr c = Char.code c - Char.code '0';;
 
 let max_packet_len = 514;;
 
+let unwrap opt = match opt with Some x -> x | None -> exit_err "bad option access";;
+
 (* Mutable state of the program *)
 
-let address = ref None;;
+let address = ref None;; (* !address : string *)
 
-let port = ref None;;
+let port = ref None;; (* !port : string *)
 
-let in_file_name = ref None;;
+let in_file_name = ref None;; (* !in_file_name : string *)
 
-let out_file_name = ref None;;
+let out_file_name = ref None;; (* !out_file_name : string *)
 
 type mode = Write | Read;;
 
-let current_mode = ref None;;
+let current_mode = ref None;; (* !current_mode : mode *)
 
-let local_file = ref None;;
+let local_file = ref None;; (* !local_file : file_descr *)
+
+let last_packet = ref Bytes.empty;;
 
 let finished = ref false;;
 
@@ -58,20 +62,43 @@ let args = [
 
 let default_mode = "netascii";;
 
+(* ONLY FOR TESTING!!! *)
+type opcode_type = RRQ | WRQ | DATA | ACK | ERROR;;
+
+let opcode_to_int t =
+  match t with
+    | RRQ   -> 1
+    | WRQ   -> 2
+    | DATA  -> 3
+    | ACK   -> 4
+    | ERROR -> 5
+;;
+
+let int_to_opcode num = 
+  match num with
+    | 1 -> RRQ
+    | 2 -> WRQ
+    | 3 -> DATA
+    | 4 -> ACK
+    | _ -> ERROR
+;;
+(* ONLY FOR TESTING!!! *)
+
+
 let create_init_packet file_name opcode = 
-  let name_len = String.length in_file_name in
-  let packet = Byte.create (2 + name_len + 1 + String.length default_mode + 1) in
-    set packet 0 '\000';
-    set packet 1 (number_to_char (type_to_int opcode));
-    blit_string in_file_name 0 packet 2 name_len;
-    set packet (2 + name_len) '\000';
-    blit_string default_mode 0 packet (2 + name_len + 1) (String.length default_mode);
-    set packet (Byte.length packet - 1) '\000';
+  let name_len = String.length file_name in
+  let packet = Bytes.create (2 + name_len + 1 + String.length default_mode + 1) in
+    Bytes.set packet 0 '\000';
+    Bytes.set packet 1 (Char.chr (opcode_to_int opcode));
+    Bytes.blit_string file_name 0 packet 2 name_len;
+    Bytes.set packet (2 + name_len) '\000';
+    Bytes.blit_string default_mode 0 packet (2 + name_len + 1) (String.length default_mode);
+    Bytes.set packet (Bytes.length packet - 1) '\000';
     packet
 ;;
 
 let send_init fd addr = 
-  let packet = if !mode = Read then 
+  let packet = if !current_mode = Read then
       create_init_packet in_file_name RRQ 
     else 
       create_init_packet out_file_name WRQ 
@@ -87,7 +114,7 @@ let receive_response fd =
 ;;
 
 let process_response fd addr response = 
-
+  match coq_advance_state response 
 ;;
 
 let run_client info = 

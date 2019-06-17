@@ -3,9 +3,7 @@ Require Import String.
 
 Require Import packet.
 
-Inductive mode : Set :=
-    | Read  : mode
-    | Write : mode.
+Inductive mode : Set := Read | Write.
 
 Record init_state : Set := mkState {
     transfer_mode : mode;
@@ -15,3 +13,4 @@ Record init_state : Set := mkState {
     timeout_count : N;
 }.
 
+Definition coq_process_state () := .
