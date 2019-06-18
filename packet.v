@@ -1,158 +1,34 @@
 Require Import ZArith.
 
-
-Local Open Scope positive_scope.
-
-Unset Elimination Schemes.
-Inductive packet_opcode : Set := RRQ | WRQ | DATA | ACK | ERROR.
-
-Definition opcode_to_nr (code: packet_opcode) :=
-  match code with  
-  | RRQ   => 1
-  | WRQ   => 2
-  | DATA  => 3
-  | ACK   => 4
-  | ERROR => 5
-  end.
-
-Lemma opcode_range : forall x, 1 <= opcode_to_nr x <= 5.
-Proof.
-intros.
-destruct x.
-all: easy.
-Qed.
-
-
-Definition nr_to_opcode (nr: positive) : option packet_opcode := 
-  match nr with
-  | 1 => Some RRQ
-  | 2 => Some WRQ
-  | 3 => Some DATA
-  | 4 => Some ACK
-  | 5 => Some ERROR
-  | _ => None
-  end.
-
-
-Lemma nr_opcode_ident : forall x, (x = 1 \/ x = 2 \/ x = 3 \/ x = 4 \/ x = 5) ->
-  match nr_to_opcode x with 
-    | Some opcode => x = opcode_to_nr opcode
-    | None => True
-  end.
-Proof.
-intros x bounds.
-case bounds.
-* intros.
-  rewrite H.
-  unfold nr_to_opcode.
-  auto.
-* intros bounds2.
-  case bounds2.
-  + intros.
-    rewrite H.
-    unfold nr_to_opcode.
-    auto.
-  + intros bounds3.
-    case bounds3.
-    - intros.
-      rewrite H.
-      unfold nr_to_opcode.
-      auto.
-    - intros bounds4.
-      case bounds4.
-      all: intros.
-      all: rewrite H.
-      all: unfold nr_to_opcode.
-      all: auto.
-Qed.
-
-
-Lemma nr_opcode_none : forall x, x > 5 \/ x < 1 -> nr_to_opcode x = None.
-Proof.
-intros.
-unfold nr_to_opcode.
-case H.
-* intro gt5.
-  destruct x.
-  + destruct x.
-    - trivial.
-    - destruct x; easy.
-    - easy.
-  + destruct x.
-    - trivial.
-    - destruct x; easy.
-    - easy.
-  + easy.
-* intro.
-  destruct x.  
-  all: easy.
-Qed.
-
+Require Import String.
 Require Import Ascii.
 
 Open Scope char_scope.
 
-Definition opcode_to_ascii (op : packet_opcode) : ascii :=
-   ascii_of_pos (opcode_to_nr op).
 
-Theorem opcode_to_ascii_and_back : forall op : packet_opcode, N_of_ascii (opcode_to_ascii op) = Npos (opcode_to_nr op).
-Proof.
-intros.
-destruct op.
-all: simpl.
-all: trivial.
-Qed.
+Unset Elimination Schemes.
 
-(* FMLLLLL
-      all: auto.
-      exfalso.
-      assert (5 < 4).
-      { apply Pos.gt_lt_iff. assumption. }
-      assert (2 < 1).
-      { apply Pos.succ_lt_mono. apply Pos.succ_lt_mono. apply Pos.succ_lt_mono. assumption. }
-      apply (Pos.nlt_1_r 2).
-      assumption.
-    - exfalso.
-      easy.
-      assert (5 < 2).
-      { apply Pos.gt_lt_iff. assumption. }
-      assert (4 < 1).
-      { apply Pos.succ_lt_mono. assumption. }
-      apply (Pos.nlt_1_r 4).
-      assumption.
-  + exfalso.
-    cut (5 < 1).
-    ** intros.
-       apply (Pos.nlt_1_r 5).
-       assumption.
-    ** apply Pos.gt_lt_iff. assumption.
-* intros lt1.
-  exfalso.
-  apply (Pos.nlt_1_r x).
-  assumption.
-Qed.*)
+AddPath "/Users/joald/wwk/client" as.
 
-Inductive error_code : Set := 
-| NOT_DEFINED 
-| FILE_NOT_FOUND 
-| ACCESS_VIOLATION
-| DISK_FULL_OR_ALLOCATION_EXCEEDED
-| ILLEGAL_TFTP_OPERATION
-| UNKNOWN_TRANSFER_ID
-| FILE_ALREADY_EXISTS.
+Load maybe.
 
+Load aux.
 
+Load opcode.
+
+Load errcode.
+
+(* Packets. *)
 
 Inductive mode : Set := Read | Write.
 
-
-Require Import String.
+Local Open Scope N_scope.
 
 Inductive packet : Set := 
 | p_RRQ : string -> packet                  (* Filename *)
 | p_WRQ : string -> packet                  (* Filename *)
-| p_DATA : positive -> string -> packet     (* Block #, Data *)
-| p_ACK : positive -> packet                (* Block # *)
+| p_DATA : forall (x : N), x < two_bytes_range_size -> string -> packet     (* Block #, Data *)
+| p_ACK : forall (x : N), x < two_bytes_range_size -> packet                (* Block # *)
 | p_ERROR : error_code -> string -> packet. (* ErrorCode, ErrMsg *)
 
 
@@ -178,15 +54,170 @@ rewrite H.
 auto.
 Qed.
 
-
-
-
 Definition serialize_packet (p : packet) : string := 
   match p with
-  | p_RRQ filename => String "000" (String (opcode_to_ascii RRQ) (filename ++ String "000" ("octet" ++ String "000" EmptyString))).
-  | p_WRQ filename => String "000" (String (opcode_to_ascii WRQ) (filename ++ String "000" ("octet" ++ String "000" EmptyString))).
-  | p_DATA 
+  | p_RRQ filename => opcode_to_string RRQ ++ null_terminate filename ++ null_terminate "octet"
+  | p_WRQ filename => opcode_to_string WRQ ++ null_terminate filename ++ null_terminate "octet"
+  | p_DATA block_no _ data => opcode_to_string DATA ++ word_no_to_string block_no ++ data
+  | p_ACK block_no _ => opcode_to_string ACK ++ word_no_to_string block_no
+  | p_ERROR err_code err_msg => opcode_to_string ERROR ++ err_code_to_string err_code ++ null_terminate err_msg
+  end.
 
+Definition deserialize_packet (s : string) : option packet.
+Proof.
+  refine (
+  match s with
+  | String zero (String x rest) => 
+    match ascii_to_opcode x with
+    | Some RRQ => None (* The client will never need to deserialize requests. *)
+    | Some WRQ => None
+    | Some DATA => 
+      match rest with
+      | String c1 (String c2 rest2) => 
+        let s := two_ascii_to_string c1 c2 in _
+      | _ => None
+      end
+    | Some ACK => 
+      match rest with
+      | String c1 (String c2 EmptyString) => 
+        let s := two_ascii_to_string c1 c2 in _
+      | _ => None
+      end
+    | Some ERROR => 
+      match rest with
+      | String c1 (String c2 rest2) => 
+        let s := two_ascii_to_string c1 c2 in _
+      | _ => None
+      end
+    | None => None
+    end
+  | _ => None
+  end).
+(* DATA *)
+* remember (string_to_word_no s) as X.
+  destruct X.
+  + refine (Some (p_DATA n (string_to_word_no_in_range s n _) rest2)).
+    auto.
+  + exact None.
+(* ACK *)
+* remember (string_to_word_no s) as X.
+  destruct X.
+  + refine (Some (p_ACK n (string_to_word_no_in_range s n _))).
+    auto.
+  + exact None.
+(* ERROR *)
+* remember (string_to_word_no s) as X.
+  destruct X.
+  + remember (nr_to_err_code n) as opt.
+    destruct opt.
+    - refine (Some (p_ERROR e rest2)).
+    - exact None.
+  + exact None.
+Defined.
+
+Lemma some_eq : forall A : Type, forall x y : A, x = y -> Some x = Some y.
+Proof.
+magics.
+inversion H.
+auto.
+Qed.
+(*
+Import EqNotations.
+Lemma args_ok : forall x1 x2 : N, forall H : x1 = x2, forall v, forall y1 : x1 < v, forall y2 : x2 < v, rew H in (y1 = y2).
+
+Lemma data_ok : forall x1 x2 z1 z2, forall H : x1 = x2, z1 = z2 -> p_DATA x1 y z1 = p_DATA x2 y z2.
+*)
+(*
+Theorem packet_string_ident : forall p, deserialize_packet (serialize_packet p) = Some p \/ deserialize_packet (serialize_packet p) = None.
+Proof with magics.
+magics.
+destruct p...
+* left.
+  apply (some_eq packet _ _).
+  assert ((N_of_ascii (ascii_of_N (x / byte_range_size)) *
+   byte_range_size +
+   N_of_ascii (ascii_of_N (x mod byte_range_size))) = x).
+  { rewrite (N_ascii_embedding (x / byte_range_size)).
+    + rewrite (N_ascii_embedding (x mod byte_range_size)); unfold byte_range_size.
+      - admit.
+      - unfold two_bytes_range_size in l.
+        remember (N.mod_bound_pos x 256) as B.
+        apply B.
+        -- elim x...
+        -- magic.
+    + unfold byte_range_size.
+      unfold two_bytes_range_size in l.
+      admit. }
+  rewrite <- H.
+  unfold byte_range_size...
+  unfold string_to_word_no_in_range.
+      
+
+rewrite (N.mul_comm (x / 256) 256)...
+  assert (forall x1 x2 y z1 z2, x1 = x2 -> z1 = z2 -> p_DATA x1 y z1 = p_DATA x2 y z2).
+  Check N_ascii_embedding.
+  unfold byte_range_size.
+  rewrite (N_ascii_embedding (x mod 256)).
+  rewrite (N_ascii_embedding (x / byte_range_size)).
+  rewrite (div_mul_mod_ident n byte_range_size); auto.
+  + easy.
+  + 
+
+*)
+Theorem rrq_serial_ident : forall 
+
+Theorem string_packet_ident : forall s p p2, serialize_packet p = s -> deserialize_packet s = Some p2 -> p = p2.
+Proof with magics.
+intros s p p2 SP DSP.
+destruct p; destruct p2.
+all: rewrite <- SP in DSP...
+* cut (s0 = s1 /\ x = x0).
+  { magic. rewrite H0. Show Proof. rewrite H1...
+  unfold serialize_packet in DSP...
+  unfold opcode_to_string in DSP...
+  unfold word_no_to_string in DSP...
+  unfold byte_range_size in DSP...
+  unfold opcode_to_ascii in DSP...
+  unfold two_ascii_to_string in DSP...
+  unfold opcode_to_nr in DSP...
+  unfold ascii_of_pos in DSP...
+  unfold deserialize_packet in DSP...
+  unfold ascii_to_opcode in DSP...
+  destruct x...
+  + simpl in DSP...
+    unfold two_ascii_to_string in DSP...
+    destruct x0...
+    unfold  in DSP...
+  
+  
+  
+destruct p; rewrite <- H.
+* unfold serialize_packet.
+* unfold deserialize_packet; simpl; auto.
+  rewrite <- H.
+  simpl serialize_packet.
+  unfold opcode_to_ascii.
+  unfold opcode_to_nr.
+  unfold ascii_of_pos.
+  unfold ascii_to_opcode.
+  simpl N_of_ascii.
+  unfold nr_to_opcode.
+  simpl .
+    rewrite <- H.
+    exfalso.
+
+
+
+
+simpl. 
+  unfold opcode_to_ascii.
+  simpl.
+  unfold ascii_of_pos. 
+  unfold null_terminate.
+  simpl.
+  destruct (deserialize_packet s).
+  + 
+  
 (* client *)
 
 
