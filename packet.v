@@ -5,9 +5,6 @@ Require Import Ascii.
 
 Open Scope char_scope.
 
-
-Unset Elimination Schemes.
-
 AddPath "/Users/joald/wwk/client" as.
 
 Load maybe.
@@ -32,13 +29,13 @@ Inductive packet : Set :=
 | p_ERROR : error_code -> string -> packet. (* ErrorCode, ErrMsg *)
 
 
-Definition init_packet (m : mode) (filename : string) : packet := 
+Definition init_packet (m : mode) (in_filename : string) (out_filename : string) : packet := 
   match m with
-  | Read => p_RRQ filename
-  | Write => p_WRQ filename
+  | Read => p_RRQ in_filename
+  | Write => p_WRQ out_filename
   end.
 
-Theorem init_packet_read_rrq : forall s : string, forall m : mode, m = Read -> init_packet m s = p_RRQ s.
+Theorem init_packet_read_rrq : forall s_in s_out m, m = Read -> init_packet m s_in s_out = p_RRQ s_in.
 Proof.
 intros.
 unfold init_packet.
@@ -46,7 +43,7 @@ rewrite H.
 auto.
 Qed.
 
-Theorem init_packet_write_wrq : forall s : string, forall m : mode, m = Write -> init_packet m s = p_WRQ s.
+Theorem init_packet_write_wrq : forall s_in s_out m, m = Write -> init_packet m s_in s_out = p_WRQ s_out.
 Proof.
 intros.
 unfold init_packet.
@@ -110,7 +107,7 @@ Proof.
   destruct X.
   + remember (nr_to_err_code n) as opt.
     destruct opt.
-    - refine (Some (p_ERROR e rest2)).
+    - refine (Some (p_ERROR e (remove_last rest2))).
     - exact None.
   + exact None.
 Defined.
@@ -121,113 +118,94 @@ magics.
 inversion H.
 auto.
 Qed.
-(*
-Import EqNotations.
-Lemma args_ok : forall x1 x2 : N, forall H : x1 = x2, forall v, forall y1 : x1 < v, forall y2 : x2 < v, rew H in (y1 = y2).
 
-Lemma data_ok : forall x1 x2 z1 z2, forall H : x1 = x2, z1 = z2 -> p_DATA x1 y z1 = p_DATA x2 y z2.
-*)
-(*
-Theorem packet_string_ident : forall p, deserialize_packet (serialize_packet p) = Some p \/ deserialize_packet (serialize_packet p) = None.
-Proof with magics.
+Theorem rrq_serial_ident : forall s, deserialize_packet (serialize_packet (p_RRQ s)) = None.
+Proof.
 magics.
-destruct p...
-* left.
-  apply (some_eq packet _ _).
-  assert ((N_of_ascii (ascii_of_N (x / byte_range_size)) *
-   byte_range_size +
-   N_of_ascii (ascii_of_N (x mod byte_range_size))) = x).
-  { rewrite (N_ascii_embedding (x / byte_range_size)).
-    + rewrite (N_ascii_embedding (x mod byte_range_size)); unfold byte_range_size.
-      - admit.
-      - unfold two_bytes_range_size in l.
-        remember (N.mod_bound_pos x 256) as B.
-        apply B.
-        -- elim x...
-        -- magic.
-    + unfold byte_range_size.
-      unfold two_bytes_range_size in l.
-      admit. }
-  rewrite <- H.
-  unfold byte_range_size...
-  unfold string_to_word_no_in_range.
-      
+Qed.
 
-rewrite (N.mul_comm (x / 256) 256)...
-  assert (forall x1 x2 y z1 z2, x1 = x2 -> z1 = z2 -> p_DATA x1 y z1 = p_DATA x2 y z2).
-  Check N_ascii_embedding.
-  unfold byte_range_size.
-  rewrite (N_ascii_embedding (x mod 256)).
-  rewrite (N_ascii_embedding (x / byte_range_size)).
-  rewrite (div_mul_mod_ident n byte_range_size); auto.
-  + easy.
-  + 
+Theorem wrq_serial_ident : forall s, deserialize_packet (serialize_packet (p_WRQ s)) = None.
+Proof.
+magics.
+Qed.
 
-*)
-Theorem rrq_serial_ident : forall 
-
-Theorem string_packet_ident : forall s p p2, serialize_packet p = s -> deserialize_packet s = Some p2 -> p = p2.
+Theorem data_serial_ident : 
+  forall x x2 : N,
+  forall s s2 : string, 
+  forall H : x < two_bytes_range_size,
+  forall H2 : x2 < two_bytes_range_size,
+  match deserialize_packet (serialize_packet (p_DATA x H s)) with 
+  | Some (p_DATA x2 H2 s2) => x = x2 /\ s = s2
+  | Some _ => False
+  | None => True
+  end.
 Proof with magics.
-intros s p p2 SP DSP.
-destruct p; destruct p2.
-all: rewrite <- SP in DSP...
-* cut (s0 = s1 /\ x = x0).
-  { magic. rewrite H0. Show Proof. rewrite H1...
-  unfold serialize_packet in DSP...
-  unfold opcode_to_string in DSP...
-  unfold word_no_to_string in DSP...
-  unfold byte_range_size in DSP...
-  unfold opcode_to_ascii in DSP...
-  unfold two_ascii_to_string in DSP...
-  unfold opcode_to_nr in DSP...
-  unfold ascii_of_pos in DSP...
-  unfold deserialize_packet in DSP...
-  unfold ascii_to_opcode in DSP...
-  destruct x...
-  + simpl in DSP...
-    unfold two_ascii_to_string in DSP...
-    destruct x0...
-    unfold  in DSP...
-  
-  
-  
-destruct p; rewrite <- H.
-* unfold serialize_packet.
-* unfold deserialize_packet; simpl; auto.
-  rewrite <- H.
-  simpl serialize_packet.
-  unfold opcode_to_ascii.
-  unfold opcode_to_nr.
-  unfold ascii_of_pos.
-  unfold ascii_to_opcode.
-  simpl N_of_ascii.
-  unfold nr_to_opcode.
-  simpl .
-    rewrite <- H.
-    exfalso.
+magic.
+unfold byte_range_size.
+rewrite (N_ascii_embedding (x / 256)).
+* magic.
+  rewrite (N_ascii_embedding (x mod 256)).
+  + rewrite (N.mul_comm (x / 256) 256).
+    rewrite <- (N.div_mod x 256)...
+  + remember (N.mod_bound_pos x 256) as B.
+    apply B.
+    - elim x...
+    - magics.
+* magic.
+  unfold two_bytes_range_size in H.
 
+  cut (256 * x / 256 < 256 * 256).
+  { magic.
+    rewrite (N.mul_lt_mono_pos_r 256 (x / 256) 256).
+    + assert (256 * (x / 256) <= 256 * x / 256).
+      { rewrite (N.mul_comm 256 x).
+        rewrite (N.div_mul x 256).
+        rewrite (N.mul_div_le x 256)...
+        easy. } 
+    magics. 
+    + magic. }
+  rewrite (N.mul_comm 256 x).
+  rewrite (N.div_mul x 256)...
+Qed.
 
+Theorem ack_serial_ident : 
+  forall x x2 : N,
+  forall s s2 : string, 
+  forall H : x < two_bytes_range_size,
+  forall H2 : x2 < two_bytes_range_size,
+  match deserialize_packet (serialize_packet (p_ACK x H)) with 
+  | Some (p_ACK x2 H2) => x = x2
+  | Some _ => False
+  | None => True
+  end.
+Proof with magics.
+magic.
+unfold byte_range_size.
+rewrite (N_ascii_embedding (x / 256)).
+* rewrite (N_ascii_embedding (x mod 256)).
+  + rewrite (N.mul_comm (x / 256) 256).
+    rewrite <- (N.div_mod x 256)...
+  + apply (N.mod_bound_pos x 256).
+    - elim x...
+    - magics.
+* magic.
+  unfold two_bytes_range_size in H.
 
+  cut (256 * x / 256 < 256 * 256).
+  { magic.
+    rewrite (N.mul_lt_mono_pos_r 256 (x / 256) 256).
+    + assert (256 * (x / 256) <= 256 * x / 256).
+      { rewrite (N.mul_comm 256 x).
+        rewrite (N.div_mul x 256).
+        rewrite (N.mul_div_le x 256)...
+        easy. } 
+    magics. 
+    + magic. }
+  rewrite (N.mul_comm 256 x).
+  rewrite (N.div_mul x 256)...
+Qed.
 
-simpl. 
-  unfold opcode_to_ascii.
-  simpl.
-  unfold ascii_of_pos. 
-  unfold null_terminate.
-  simpl.
-  destruct (deserialize_packet s).
-  + 
-  
-(* client *)
-
-
-
-Record init_state : Set := mkState {
-    transfer_mode : mode;
-    filename : string;
-    port: positive;
-    last_packet : option packet;
-    timeout_count : N;
-}.
-
-Definition coq_process_state () := .
+Theorem error_serial_ident : forall err s, deserialize_packet (serialize_packet (p_ERROR err s)) = Some (p_ERROR err s).
+Proof with magics.
+destruct err; magic; rewrite (null_determination s)...
+Qed.

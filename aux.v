@@ -61,10 +61,9 @@ destruct s; auto.
     exfalso.
     inversion H.
   + destruct s; auto.
-    Focus 2.
-    - intro.
-      exfalso.
-      inversion H.
+    2: intro.
+    2: exfalso.
+    2: inversion H.
 assert (N_of_ascii a < byte_range_size) as aLower.
 { apply (char_less_than_256 a). }
 
@@ -95,7 +94,7 @@ destruct (N_of_ascii a); destruct (N_of_ascii a0); auto.
   -- easy.
 - assert (N.pos p * byte_range_size <= (byte_range_size - 1) * byte_range_size).
   { magics. }
-  magic.
+  magic. 
   unfold two_bytes_range_size.
   Local Close Scope N_scope.
   Local Open Scope positive_scope.
@@ -152,8 +151,15 @@ Qed.
 Local Close Scope N_scope.
 Local Open Scope positive_scope.
 
-Definition null_terminate (s : string) : string :=
+(*Definition null_terminate (s : string) : string :=
   s ++ String zero EmptyString.
+*)
+
+Fixpoint null_terminate (s : string) : string :=
+  match s with
+  | EmptyString => String zero EmptyString
+  | String c rest => String c (null_terminate rest)
+  end.
 
 Fixpoint str_last (s : string) : ascii :=
   match s with
@@ -169,4 +175,149 @@ unfold null_terminate...
 unfold str_last...
 elim s...
 destruct s0...
+Qed.
+
+Fixpoint remove_last (s : string) : string :=
+  match s with
+  | EmptyString => EmptyString
+  | String c EmptyString => EmptyString
+  | String c rest => String c (remove_last rest)
+  end.
+(*
+Fixpoint elem_str (s : string) (c : ascii) := 
+  match s with
+  | EmptyString => False
+  | String c2 rest => c2 = c \/ (c2 <> c /\ elem_str rest c)
+  end.
+*)
+Local Close Scope positive_scope.
+Local Open Scope nat_scope.
+
+Lemma string_length_cons : forall s c, S(length s) = length (String c s).
+Proof. magics. Qed.
+
+Definition elem_str (s : string) (c : ascii) := exists n, get n s = Some c.
+(*
+Lemma elem_str_in_str : forall s c, elem_str s c -> exists n, n < length s.
+Proof.
+magics.
+unfold elem_str in H.
+destruct H as [n G].
+exists n.
+destruct s.
+* simpl in G.
+  magics.
+* simpl in G.
+  destruct n.
+  + magics.
+  + unfold get in G. magic.
+    rewrite <- (string_length_cons s a) in H.
+    remember (length s) as l.
+    rewrite 
+    unfold length in H.
+Qed.*)
+
+Theorem empty_string_is_empty : forall c, ~elem_str EmptyString c.
+Proof. 
+magics.
+unfold elem_str in H.
+unfold get in H.
+destruct H.
+magics.
+Qed.
+(*
+Theorem append_preserves_elems : forall s1 s2 c, (elem_str s1 c \/ elem_str s2 c) -> elem_str (s1 ++ s2) c.
+Proof with magics.
+magic.
+* unfold elem_str.
+  unfold elem_str in H0.
+  destruct H0 as [x G].
+  exists x.
+  rewrite <- (append_correct1 s1 s2 x).
+  + magic.
+  + unfold get in G.
+*)
+Theorem remove_last_no_remove_first : forall s c1 c2, 
+  remove_last (String c1 (String c2 s)) = String c1 (remove_last (String c2 s)).
+Proof. magics. Qed.
+
+Local Open Scope string_scope.
+(*
+Theorem remove_last_no_remove_concat : forall s1 s2 c, 
+  remove_last (s1 ++ String c s2) = s1 ++ remove_last (String c s2).
+Proof with magic.
+intros.
+elim s2.
+* magics.
+  elim s1.
+  + magic.
+  + intros.
+    destruct s.
+    - magics.
+    - assert (String a (String a0 s) ++ String c EmptyString = String a (String a0 (s ++ String c EmptyString))).
+      { magics. }
+      rewrite H0.
+      rewrite (remove_last_no_remove_first (s ++ String c "") a a0). 
+      simpl (String a0 s ++ "") in H.
+      simpl (String a (String a0 s) ++ ""). 
+      rewrite <- H.
+      magics.
+* intros.
+  assert (forall c s, remove_last (String c s) = String c (remove_last s) \/ remove_last (String c s) = EmptyString).
+  { destruct s0.
+    * right.
+      magics.
+    * left. apply (remove_last_no_remove_first s0 c0 a0). }
+  rewrite (remove_last_no_remove_first s c a).
+  destruct (H0 a s) as [|].
+  + rewrite H1 in H.
+
+  pattern (remove_last (String c s)) in H.
+  simpl in HeqRcs.
+
+  fold (match s with
+         | "" => ""
+         | String _ _ => String c (remove_last s)
+         end) in HeqRcs.
+Theorem remove_last_removes : forall s c, remove_last (s ++ (String c EmptyString)) = s.
+Proof with magics.
+magic.
+elim s.
+* magic.
+* magic.
+  rewrite H.
+  remember ((s0 ++ String c EmptyString)%string) as s2.
+  assert (s2 <> EmptyString).
+  { (*remember (empty_string_is_empty c) as E.
+    assert (elem_str s2 c).
+    { remember (get (length s0) s2) as c2.
+      unfold get in Heqc2. rewrite Heqs2 in Heqc2.
+      
+      +*) admit. }
+  Search (_ ++ _)%string.
+  unfold (neq) in H0.
+  unfold remove_last in H.
+*)
+Theorem null_determination : forall s, remove_last (null_terminate s) = s.
+Proof with magics.
+magics.
+induction s.
+* magic.
+* magics.
+  assert (forall s, null_terminate s <> EmptyString).
+  { intro.
+    elim s0... }
+  remember (H s) as NonE.
+  rewrite IHs.
+  assert (exists a b, null_terminate s = String a b).
+  { destruct s.
+    + simpl (null_terminate "").
+      exists zero.
+      exists ""...
+    + exists a0.
+      simpl.
+      exists (null_terminate s)... }
+  destruct H0.
+  destruct H0.
+  rewrite H0...
 Qed.
