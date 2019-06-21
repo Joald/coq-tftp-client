@@ -1,3 +1,10 @@
+Require Import String.
+
+AddPath "/Users/joald/wwk/client" as.
+
+Load aux.
+Load maybe.
+
 (* Error codes. *)
 
 Inductive error_code : Set := 
@@ -58,4 +65,5 @@ simpl;
 unfold string_to_err_code;
 simpl;
 auto.
+Show Proof.
 Qed.

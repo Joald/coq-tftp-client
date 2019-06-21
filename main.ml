@@ -25,9 +25,7 @@ let unwrap opt = match opt with Some x -> x | None -> exit_err "bad option acces
 
 let address = ref None;; (* !address : string *)
 
-let port = ref None;; (* !port : string *)
-
-let in_file_name = ref None;; (* !in_file_name : string *)
+let in_file_name = ref None;; (* !in_file_name  string *)
 
 let out_file_name = ref None;; (* !out_file_name : string *)
 
@@ -52,7 +50,6 @@ let set_mode new_mode =
 
 let args = [
   ("-a", Arg.String (assign_opt address), "The address of the server.");
-  ("-p", Arg.String (assign_opt port), "The port of the server.");
   ("-i", Arg.String (assign_opt in_file_name), "The name of the input file.");
   ("-o", Arg.String (assign_opt out_file_name), "The name of the input file.");
   ("-m", Arg.String set_mode, "The mode of file transfer, \"read\" or \"write\".")

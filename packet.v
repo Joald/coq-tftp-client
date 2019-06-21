@@ -7,10 +7,6 @@ Open Scope char_scope.
 
 AddPath "/Users/joald/wwk/client" as.
 
-Load maybe.
-
-Load aux.
-
 Load opcode.
 
 Load errcode.
