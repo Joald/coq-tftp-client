@@ -28,6 +28,23 @@ Record state : Set := mkState {
   file_contents : string;
 }.
 
+Definition change_orders (ords : list directive) (st : state) : state :=
+  mkState ords (transfer_mode st) (port st) (last_packet st) (last_block_id st) (did_retransmit st) (finished st) (file_contents st).
+
+Definition change_last_packet (lp : packet) (st : state) : state :=
+  mkState (orders st) (transfer_mode st) (port st) lp (last_block_id st) (did_retransmit st) (finished st) (file_contents st).
+
+Definition change_last_block_id (bid : N) (st : state) : state :=
+  mkState (orders st) (transfer_mode st) (port st) (last_packet st) bid (did_retransmit st) (finished st) (file_contents st).
+
+Definition change_did_retransmit (dr : bool) (st : state) : state :=
+  mkState (orders st) (transfer_mode st) (port st) (last_packet st) (last_block_id st) dr (finished st) (file_contents st).
+
+Definition change_finished (fin : bool) (st : state) : state :=
+  mkState (orders st) (transfer_mode st) (port st) (last_packet st) (last_block_id st) (did_retransmit st) fin (file_contents st).
+
+Definition change_file_contents (filc : string) (st : state) : state :=
+  mkState (orders st) (transfer_mode st) (port st) (last_packet st) (last_block_id st) (did_retransmit st) (finished st) filc.
 
 Record result := mkResult {
   (* the packet that the client needs to send next *)
@@ -96,10 +113,12 @@ Definition wrong_source_port (st : state) (p : positive) : result := mkResult
   (serialize_packet (p_ERROR UNKNOWN_TRANSFER_ID ""))
   (mkState [SEND_TO p] (transfer_mode st) (port st) (last_packet st) (last_block_id st) (did_retransmit st) (finished st) (file_contents st)).
 
+Require Import Coq.Program.Basics.
+Open Scope program_scope.
 Definition request_retransmit (st : state) : result := 
   if did_retransmit st
-    then mkResult "The server timed out."
-      (mkState [PRINT] (transfer_mode st) (port st) (last_packet st) (last_block_id st) true true "")
+    then mkResult "The server timed out." 
+      ((change_orders [PRINT] \u2218 change_did_retransmit true \u2218 change_finished true \u2218 change_file_contents "") st)
     else mkResult 
       (serialize_packet (last_packet st))
       (mkState [SEND_PACKET] (transfer_mode st) (port st) (last_packet st) (last_block_id st) true (finished st) (file_contents st)).
@@ -112,12 +131,18 @@ Definition send_bytes (st : state) (byte_count : nat) : forall new_id, new_id < 
     (serialize_packet pac)
     (mkState [SEND_PACKET] Write (port st) pac new_id false (N_of_nat byte_count <? 512) rest).
 
+Definition port_is_bad (st : state) (p : positive) : bool :=
+  match port st with 
+  | None => false 
+  | Some p2 => negb (Pos.eqb p p2)
+  end.
+
 Definition coq_process_packet (pack : string) (st : state) (p : positive) (timeout : bool) : result.
 Proof.
 Open Scope positive_scope.
 refine (
   if finished st
-    then mkResult "" st
+    then mkResult "" (change_orders [] st)
     else _
 ).
 refine (
@@ -126,12 +151,8 @@ refine (
     else _
 ).
 refine (
-  if (
-    match port st with 
-    | None => false 
-    | Some p2 => negb (Pos.eqb p p2)
-    end 
-  ) then wrong_source_port st p
+  if port_is_bad st p
+    then wrong_source_port st p
     else _
 ).
 destruct (deserialize_packet pack).
@@ -175,14 +196,8 @@ destruct (deserialize_packet pack).
     ).
     case_eq (two_bytes_range_size ?= nr + 1).
     * intro.
-      assert (two_bytes_range_size = nr + 1).
-      { apply (N.compare_eq_iff two_bytes_range_size (nr + 1)).
-        assumption. }
       exact (illegal_operation "File too large." st).
     * intro.
-      assert (two_bytes_range_size < nr + 1).
-      { apply (N.compare_lt_iff two_bytes_range_size (nr + 1)).
-        assumption. }
       exact (illegal_operation "File too large." st).
     * intro.
       assert (nr + 1 < two_bytes_range_size).
@@ -215,7 +230,360 @@ destruct (deserialize_packet pack).
 + exact (illegal_operation "Cannot understand package." st).
 Defined.
 
+Theorem no_change_after_finish : forall pac st p timeout, 
+  finished st = true -> finished (new_state (coq_process_packet pac st p timeout)) = true.
+Proof with magics.
+magics.
+unfold coq_process_packet...
+rewrite H...
+Qed.
+
+Theorem no_action_after_finish : forall pac st p timeout, 
+  finished st = true -> orders (new_state (coq_process_packet pac st p timeout)) = [].
+Proof with magics.
+magics.
+unfold coq_process_packet...
+rewrite H...
+Qed.
+
+Definition normal_circumstances (st : state) (p : positive) (timeout : bool) : Prop :=
+  finished st = false /\
+  port_is_bad st p = false /\
+  timeout = false.
+
+
+Theorem finish_after_small_read : forall pac st p timeout num prop data,
+  normal_circumstances st p timeout -> 
+  transfer_mode st = Read -> 
+  deserialize_packet pac = Some (p_DATA num prop data) ->
+  num =? last_block_id st + 1 = true ->
+  N_of_nat (length data) < 512 ->
+  finished (new_state (coq_process_packet pac st p timeout)) = true.
+Proof with magic.
+intros pac st p timeout num prop data.
+intros Normal ReadMode PacketData BlockIDOK PacketSmall.
+unfold coq_process_packet...
+unfold normal_circumstances in Normal.
+destruct Normal as [FinF PortOK].
+destruct PortOK as [PortOK TimeoutF].
+rewrite FinF...
+rewrite TimeoutF...
+rewrite PortOK...
+rewrite PacketData...
+rewrite ReadMode... 
+rewrite BlockIDOK...
+assert (negb (N.of_nat (length data) =? 512) = true) as PacketIndeedSmall.
+{ unfold negb.
+  cut (N.of_nat (length data) =? 512 = false).
+  { magics. rewrite H... }
+  Search (_ =? _).
+  apply (N.eqb_neq (N.of_nat (length data)) 512 ).
+  magics.
+}
+rewrite PacketIndeedSmall.
+magic.
+Qed.
+
+Theorem finish_after_small_write : forall pac st p timeout num prop,
+  normal_circumstances st p timeout -> 
+  transfer_mode st = Write -> 
+  deserialize_packet pac = Some (p_ACK num prop) ->
+  num = last_block_id st + 1 ->
+  N_of_nat (length (file_contents st)) < 512 ->
+  finished (new_state (coq_process_packet pac st p timeout)) = true.
+Proof with magic.
+intros pac st p timeout num prop.
+intros Normal WriteMode PacketACK BlockIDOK PacketSmall.
+unfold coq_process_packet.
+unfold normal_circumstances in Normal.
+destruct Normal as [FinF [PortOK TimeoutF]].
+rewrite FinF.
+rewrite TimeoutF.
+rewrite PortOK.
+rewrite PacketACK.
+rewrite WriteMode.
+rewrite BlockIDOK.
+assert (last_block_id st + 1 < two_bytes_range_size).
+{ rewrite <- BlockIDOK... }
+unfold two_bytes_range_size in *.
+unfold N.compare in *.
+
+assert (exists m, last_block_id st + 1 + 1 = N.pos m).
+{ destruct (last_block_id st).
+  + simpl.
+    exists 2%positive...
+  + magics.
+    exists (p0 + 1 + 1)%positive...
+}
+destruct H0 as [x H0].
+rewrite H0.
+assert (N.pos x <= 65536).
+{ rewrite <- H0.
+  assert (forall x, x + 1 = N.succ x).
+  { magics. }
+  rewrite (H1 (last_block_id st + 1)).
+  apply (N.le_succ_l (last_block_id st + 1) 65536).
+  assumption.
+}
+assert (N.pos x ?= 65536 <> Gt).
+{ apply (N.compare_le_iff (N.pos x) 65536).
+  assumption. 
+}
+assert (N.pos x < 65536 \/ N.pos x = 65536) as X.
+{ apply (N.le_lteq (N.pos x) 65536). 
+  assumption. }
+destruct X as [X1 | X2]. 
+Close Scope N_scope.
+Open Scope positive_scope.
+* assert (65536 ?= x = Gt) as G.
+  { apply (Pos.compare_gt_iff 65536 x).
+    assumption. }
+
+
+Require Import Coq.Logic.FunctionalExtensionality.
+Require Import Coq.Logic.Eqdep_dec.
+(*  assert (
+   (fun pf : (65536 ?= x) = Gt =>
+      N.compare_gt_iff 65536 (N.pos x) pf
+   ) = (
+    fun pf : (65536 ?= x) = Gt =>
+      N.compare_gt_iff 65536 (N.pos x) G
+   )
+  ).*)
+  assert (
+    (fun H3 : (65536 ?= x) = Gt =>
+      match
+        match N.of_nat (length (file_contents st)) with
+        | 0%N => Lt
+        | N.pos n' => n' ?= 512
+        end as c
+        return
+          (match N.of_nat (length (file_contents st)) with
+           | 0%N => Lt
+           | N.pos n' => n' ?= 512
+           end = c -> result)
+      with
+      | Eq =>
+          fun
+            _ : match N.of_nat (length (file_contents st)) with
+                | 0%N => Lt
+                | N.pos n' => n' ?= 512
+                end = Eq =>
+          send_bytes st 512 (N.pos x)
+            (match N.compare_gt_iff 65536 (N.pos x) with
+             | conj H5 _ => H5
+             end H3)
+      | Lt =>
+          fun
+            _ : match N.of_nat (length (file_contents st)) with
+                | 0%N => Lt
+                | N.pos n' => n' ?= 512
+                end = Lt =>
+          send_bytes st
+            (N.to_nat (N.of_nat (length (file_contents st))))
+            (N.pos x)
+            (match N.compare_gt_iff 65536 (N.pos x) with
+             | conj H5 _ => H5
+             end H3)
+      | Gt =>
+          fun
+            _ : match N.of_nat (length (file_contents st)) with
+                | 0%N => Lt
+                | N.pos n' => n' ?= 512
+                end = Gt =>
+          send_bytes st 512 (N.pos x)
+            (match N.compare_gt_iff 65536 (N.pos x) with
+             | conj H5 _ => H5
+             end H3)
+      end eq_refl
+    ) = (fun H3 : (65536 ?= x) = Gt =>
+      match
+        match N.of_nat (length (file_contents st)) with
+        | 0%N => Lt
+        | N.pos n' => n' ?= 512
+        end as c
+        return
+          (match N.of_nat (length (file_contents st)) with
+           | 0%N => Lt
+           | N.pos n' => n' ?= 512
+           end = c -> result)
+      with
+      | Eq =>
+          fun
+            _ : match N.of_nat (length (file_contents st)) with
+                | 0%N => Lt
+                | N.pos n' => n' ?= 512
+                end = Eq =>
+          send_bytes st 512 (N.pos x)
+            (match N.compare_gt_iff 65536 (N.pos x) with
+             | conj H5 _ => H5
+             end G)
+      | Lt =>
+          fun
+            _ : match N.of_nat (length (file_contents st)) with
+                | 0%N => Lt
+                | N.pos n' => n' ?= 512
+                end = Lt =>
+          send_bytes st
+            (N.to_nat (N.of_nat (length (file_contents st))))
+            (N.pos x)
+            (match N.compare_gt_iff 65536 (N.pos x) with
+             | conj H5 _ => H5
+             end G)
+      | Gt =>
+          fun
+            _ : match N.of_nat (length (file_contents st)) with
+                | 0%N => Lt
+                | N.pos n' => n' ?= 512
+                end = Gt =>
+          send_bytes st 512 (N.pos x)
+            (match N.compare_gt_iff 65536 (N.pos x) with
+             | conj H5 _ => H5
+             end G)
+      end eq_refl
+    )
+  ).
+  { extensionality H3.
+    repeat f_equal.
+    intro.
+Local Close Scope positive_scope.
+Local Open Scope N_scope.
+    assert (N.of_nat (length (file_contents st)) ?= 512 = Lt).
+    { apply (N.compare_lt_iff (N.of_nat (length (file_contents st))) 512).
+      assumption. }
+    admit.
+  }
+  Check conj.
+  generalize ((65536 ?= x)%positive).
+  rewrite G.
+  ++++ intros ->.
+    generalize (eq_refl ( N16_to_N next_block + 1 ?= 256 * 256)).
+    revert H10.
+    case_eq (N16_to_N next_block + 1 ?= 256 * 256);
+      intros; unfold N.lt in H1; congruence + reflexivity.
+  ++++ extensionality pf.
+    f_equal.
+    f_equal.
+    apply UIP_dec.
+    decide equality.
+  rewrite G. (65536 ?= x = Gt).
+  magics.
+  
+  generalize dependent (65536 ?= x).
+  generalize (finished
+  (new_state
+     (match
+        65536 ?= x as c return ((65536 ?= x) = c -> result)
+      with
+      | Eq =>
+          fun _ : (65536 ?= x) = Eq =>
+          illegal_operation "File too large." st
+      | Lt =>
+          fun _ : (65536 ?= x) = Lt =>
+          illegal_operation "File too large." st
+      | Gt =>
+          fun H7 : (65536 ?= x) = Gt =>
+          match
+            match N.of_nat (length (file_contents st)) with
+            | 0%N => Lt
+            | N.pos n' => n' ?= 512
+            end as c
+            return
+              (match
+                 N.of_nat (length (file_contents st))
+               with
+               | 0%N => Lt
+               | N.pos n' => n' ?= 512
+               end = c -> result)
+          with
+          | Eq =>
+              fun
+                _ : match
+                      N.of_nat (length (file_contents st))
+                    with
+                    | 0%N => Lt
+                    | N.pos n' => n' ?= 512
+                    end = Eq =>
+              send_bytes st 512 (N.pos x)
+                (match N.compare_gt_iff 65536 (N.pos x) with
+                 | conj H9 _ => H9
+                 end H7)
+          | Lt =>
+              fun
+                _ : match
+                      N.of_nat (length (file_contents st))
+                    with
+                    | 0%N => Lt
+                    | N.pos n' => n' ?= 512
+                    end = Lt =>
+              send_bytes st
+                (N.to_nat
+                   (N.of_nat (length (file_contents st))))
+                (N.pos x)
+                (match N.compare_gt_iff 65536 (N.pos x) with
+                 | conj H9 _ => H9
+                 end H7)
+          | Gt =>
+              fun
+                _ : match
+                      N.of_nat (length (file_contents st))
+                    with
+                    | 0%N => Lt
+                    | N.pos n' => n' ?= 512
+                    end = Gt =>
+              send_bytes st 512 (N.pos x)
+                (match N.compare_gt_iff 65536 (N.pos x) with
+                 | conj H9 _ => H9
+                 end H7)
+          end eq_refl
+      end eq_refl)) = true).
+  rewrite G.
+  rewrite (N.compare_gt_iff 65536 (N.pos x)).
+assert (N.pos x ?= 65536 = Lt \/ N.pos x ?= 65536 = Eq).
+{ N.order. destruct H2.
+
+destruct (last_block_id st).
+
+* magics.
+  
+  elim (length (file_contents st)).
+  + magics.
+  + magics.
+    destruct (Pos.of_succ_nat n ?= 512)%positive.
+    - magics.
+      exfalso.
+      
+destruct H as [m Hm].
+magics.
+rewrite Hm...
+assert (negb (N.of_nat (length data) =? 512) = true) as PacketIndeedSmall.
+{ unfold negb.
+  cut (N.of_nat (length data) =? 512 = false).
+  { magics. rewrite H... }
+  Search (_ =? _).
+  apply (N.eqb_neq (N.of_nat (length data)) 512 ).
+  magics.
+}
+rewrite PacketIndeedSmall.
+magic.
+Qed.
+(*  error przechodzi w error
+stan ko\u0144cowy przechodzi w error
+jak odbior\u0119 blok < 512 to wchodz\u0119 w ko\u0144cowy
+je\u015bli port jest ustalony to on si\u0119 nie zmienia
+wysy\u0142any ack ro\u015bnie o 1 po otrzymaniu pakietu
+gdy wy\u015bl\u0119 ca\u0142y plik to ko\u0144cz\u0119
+po zaackowaniu bloku m\u00f3j licznik wys\u0142anych blok\u00f3w ro\u015bnie
+Nie mam asercji na to jaki pakiet wysy\u0142am chyba
+*)
+
+
+
 (*
+Definition coq_process_packet 
+  (pack : string) 
+  (st : state) (p : positive) (timeout : bool) : result.
+
 Inductive packet : Set := 
 | p_RRQ : string -> packet                  (* Filename *)
 | p_WRQ : string -> packet                  (* Filename *)
