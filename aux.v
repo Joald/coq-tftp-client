@@ -233,3 +233,31 @@ Search (_ * (_ / _) <= _).
 apply (N.mul_div_le _ _).
 magic.
 Qed.
+
+Fixpoint N_strlen (s : string) (acc : N) : N := 
+  match s with 
+  | EmptyString => acc
+  | String _ rest => N_strlen rest (acc + 1)
+  end.
+
+Fixpoint rev_append (l l': string) : string :=
+  match l with
+  | EmptyString => l'
+  | String a l => rev_append l (String a l')
+  end.
+
+Definition rev (s : string) : string := rev_append s "".
+
+Fixpoint N_substring_acc (start : N) (len : N) (s : string) (acc: string) : string :=
+  match s with
+  | EmptyString => acc
+  | String c rest =>
+    match (start =? 0, len =? 0) with
+    | (true, false) => N_substring_acc 0 (len - 1) rest (String c acc)
+    | (_, true) => acc
+    | (false, _) => N_substring_acc (start - 1) len rest acc
+    end
+  end.
+
+Definition N_substring (start : N) (len : N) (s : string) : string := rev (N_substring_acc start len s "").
+

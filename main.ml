@@ -68,8 +68,6 @@ let explode (s : string) : char list =
 let implode (cl : char list) : string = String.concat "" (List.map (String.make 1) cl);;
 
 (* Network communication *)
-(* TODO: prove that port is always set if SEND_PACKET
-         prove that length of orders is 1 or 0 *)
 let send_bytes (fd : file_descr) (addr : sockaddr) (pac : char list) =
   let packet = implode pac in
     handle_unix_error sendto_substring fd packet 0 (String.length packet) [] addr;;
@@ -92,9 +90,7 @@ Definition coq_process_packet (pack : string) (st : state) (p : positive) (timeo
 coq_init (rw_mode : mode) (in_file : string) (out_file : string) : result
 *)
 
-let init = lazy (
-  printf "in_file: %s, out_file: %s\n" !in_file !out_file;
-    coq_init !current_mode (explode !in_file) (explode !out_file));;
+let init = lazy (coq_init !current_mode (explode !in_file) (explode !out_file));;
 
 let receive_response fd old_addr =
   let buffer = Bytes.create max_packet_len in
@@ -118,8 +114,15 @@ let rec main_loop (fd : file_descr) (addr : sockaddr) (st : state)  =
     printf "Main loop!!\nThe port is %d\n" (int_of_pos (default (pos_of_int 666) st.port));
     flush std_out;
     let (rec_addr, pac, timeout) = handle_unix_error receive_response fd addr in
+    printf "Processing packet! The last block nr is %d\n remaining file length: %d" (int_of_n st.last_block_id) (int_of_n (n_strlen st.file_contents (n_of_int 0)));
+    flush std_out;
     let res = coq_process_packet (explode pac) st (pos_of_int (sockaddr_to_port rec_addr)) timeout in
-      main_loop fd addr (process_result fd addr res)
+    printf "Processed packet!\n";
+    flush std_out;
+    let new_st = process_result fd addr res in
+    printf "Processed result!\n";
+        flush std_out;
+      main_loop fd addr new_st
   end;;
 
 let run_client info =
@@ -137,10 +140,11 @@ let main () =
     assign_opt local_file (handle_unix_error openfile !in_file [O_RDONLY] 0);
     let max_file_len = 512 * 256 * 256 + 1 in
     let buf = Bytes.create max_file_len in
-    ignore (handle_unix_error read (unwrap !local_file) buf 0 max_file_len);
-    in_file := Bytes.to_string buf
+    let size = handle_unix_error read (unwrap !local_file) buf 0 max_file_len in
+    in_file := Bytes.sub_string buf 0 size;
   end;
   printf "File opened!\n";
+  Printexc.record_backtrace false;
   let addr_list = handle_unix_error getaddrinfo !address "69"
                     [AI_FAMILY PF_INET; AI_SOCKTYPE SOCK_DGRAM] in
     run_client (List.hd addr_list)
