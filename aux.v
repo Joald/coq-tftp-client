@@ -46,70 +46,59 @@ destruct b6;
 easy.
 Qed.
 
-Theorem string_to_word_no_in_range : forall s x, 
-  string_to_word_no s = Some x -> x < two_bytes_range_size.
-Proof.
-unfold string_to_word_no.
-simpl.
-intros s x.
-destruct s; auto.
-* intros.
-  exfalso.
-  inversion H.
-* destruct s; auto.
-  + intros.
-    exfalso.
-    inversion H.
-  + destruct s; auto.
-    2: intro.
-    2: exfalso.
-    2: inversion H.
+Lemma two_bytes_in_range : forall a a0,
+  N_of_ascii a * 256 + N_of_ascii a0 < 256 * 256.
+intros.
+
 assert (N_of_ascii a < byte_range_size) as aLower.
 { apply (char_less_than_256 a). }
 
 assert (N_of_ascii a0 < byte_range_size) as a0Lower.
 { apply (char_less_than_256 a0). }
-intro.
-assert (N_of_ascii a * byte_range_size + N_of_ascii a0 = x) as Rew.
-{ inversion H. 
-  auto. }
-rewrite <- Rew.
-clear Rew.
-clear H.
-clear x.
-destruct (N_of_ascii a); destruct (N_of_ascii a0); auto.
-- assert (0 * byte_range_size + N.pos p = N.pos p).
-  { easy. }
-  rewrite H.
-  assert (byte_range_size < two_bytes_range_size).
-  { easy. }
-  rewrite a0Lower.
-  assumption.
-- rewrite (N.add_0_r (N.pos p * byte_range_size)).
-  assert (byte_range_size * byte_range_size = two_bytes_range_size).
-  { easy. }
-  rewrite <- H.
-  rewrite <- (N.mul_lt_mono_pos_r byte_range_size (N.pos p) byte_range_size).
-  -- assumption.
-  -- easy.
-- assert (N.pos p * byte_range_size <= (byte_range_size - 1) * byte_range_size).
-  { magics. }
-  magic. 
-  unfold two_bytes_range_size.
-  Local Close Scope N_scope.
-  Local Open Scope positive_scope.
-  cut (p * 256 + p0 < 65536).
-  { magics. }
-  unfold byte_range_size in H.
-  unfold byte_range_size in aLower.
+remember (N_of_ascii a) as Na.
+remember (N_of_ascii a0) as Na0.
+
+case_eq Na; case_eq Na0...
+- magics.
+- magic.
+  rewrite H in a0Lower...
   unfold byte_range_size in a0Lower.
-  simpl in H.
-  magics.
+  apply (N.lt_trans (N.pos p) 256 65536)...
+  + assumption.
+  + magic.
+- intros.
+  rewrite (N.add_0_r _).
+  Search (_ * _ < _ * _).
+  apply (N.mul_lt_mono_pos_r 256 _ 256).
+  + magic.
+  + rewrite H0 in aLower.
+    magic.
+- intros.
+  assert (N.pos p0 * 256 <= (256 - 1) * 256).
+  { rewrite H0 in aLower. 
+    unfold byte_range_size in aLower. 
+    magics. }
+  rewrite H in a0Lower.
+  Search (_ < _ -> _ <= _ -> _ < _).
+  assert (256 + (256 - 1) * 256 = 256 * 256).
+  { magics. }
+  rewrite (N.add_comm _ _).
+  rewrite <- H2.
+  apply (N.add_lt_le_mono (N.pos p) 256 (N.pos p0 * 256) ((256 - 1) * 256)); assumption.
 Qed.
 
-
-Local Close Scope positive_scope.
-Local Open Scope N_scope.
+Theorem string_to_word_no_in_range : forall s x, 
+  string_to_word_no s = Some x -> x < two_bytes_range_size.
+Proof with magic.
+unfold string_to_word_no.
+simpl.
+intros s x.
+destruct s...
+destruct s...
+destruct s...
+inversion H.
+apply (two_bytes_in_range _ _).
+Qed.
 
 Lemma div_mul_mod_ident : forall x y, y <> 0 -> x / y * y + x mod y = x.
 Proof.
@@ -225,4 +214,22 @@ induction s.
   destruct H0.
   destruct H0.
   rewrite H0...
+Qed.
+
+Local Open Scope N_scope.
+
+Theorem inequality_256 : forall X, X < 256 * 256 -> X / 256 < 256.
+Proof.
+intros.
+cut (256 * (X / 256) < 256 * 256).
+{ intro.
+  apply (N.mul_lt_mono_pos_l 256 _ 256).
+  * magic.
+  * assumption. }
+cut (256 * (X / 256) <= X).
+{ intro.
+  apply (N.le_lt_trans _ X (256 * 256)); assumption. }
+Search (_ * (_ / _) <= _).
+apply (N.mul_div_le _ _).
+magic.
 Qed.

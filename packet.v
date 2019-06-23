@@ -87,23 +87,32 @@ Proof.
   | _ => None
   end).
 (* DATA *)
-* remember (string_to_word_no s) as X.
-  destruct X.
-  + refine (Some (p_DATA n rest2)).
-  + exact None.
+* refine (
+    match string_to_word_no s with
+    | Some n => Some (p_DATA n rest2)
+    | None => None
+    end
+  ).
 (* ACK *)
-* remember (string_to_word_no s) as X.
-  destruct X.
-  + refine (Some (p_ACK n)).
-  + exact None.
+* refine (
+    match string_to_word_no s with
+    | Some n => Some (p_ACK n)
+    | None => None
+    end
+  ).
 (* ERROR *)
-* remember (string_to_word_no s) as X.
-  destruct X.
-  + remember (nr_to_err_code n) as opt.
-    destruct opt.
-    - refine (Some (p_ERROR e (remove_last rest2))).
-    - exact None.
-  + exact None.
+* refine (
+    match string_to_word_no s with
+    | Some n => _
+    | None => None
+    end
+  ).
+  refine (
+    match nr_to_err_code n with
+    | Some e => Some (p_ERROR e (remove_last rest2))
+    | None => None
+    end
+  ).
 Defined.
 
 Lemma some_eq : forall A : Type, forall x y : A, x = y -> Some x = Some y.
