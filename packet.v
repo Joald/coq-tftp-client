@@ -5,8 +5,6 @@ Require Import Ascii.
 
 Open Scope char_scope.
 
-AddPath "/Users/joald/wwk/client" as.
-
 Load opcode.
 
 Load errcode.

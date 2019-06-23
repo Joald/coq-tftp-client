@@ -7,9 +7,6 @@ Require Import Bool.
 
 Require Import Coq.NArith.Nnat.
 
-
-AddPath "/Users/joald/wwk/client" as.
-
 Load packet.
 
 Open Scope list_scope.

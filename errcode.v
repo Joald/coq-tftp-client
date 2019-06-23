@@ -1,7 +1,5 @@
 Require Import String.
 
-AddPath "/Users/joald/wwk/client" as.
-
 Load aux.
 Load maybe.
 

@@ -1,9 +1,6 @@
-#require "unix"
-
 open Unix
 open Printf
-(*open client
-  open packet*)
+open Client
 
 (* Auxiliary definitions *)
 
@@ -17,102 +14,97 @@ let nr_to_char nr = Char.chr (Char.code '0' + nr);;
 
 let char_to_nr c = Char.code c - Char.code '0';;
 
-let max_packet_len = 514;;
+let max_packet_len = 1024;;
 
 let unwrap opt = match opt with Some x -> x | None -> exit_err "bad option access";;
 
 (* Mutable state of the program *)
 
-let address = ref None;; (* !address : string *)
+let address = ref "";; (* !address : string *)
 
-let in_file_name = ref None;; (* !in_file_name  string *)
+let in_file = ref "";; (* !in_file : string *)
 
-let out_file_name = ref None;; (* !out_file_name : string *)
+let out_file = ref "";; (* !out_file : string *)
 
-type mode = Write | Read;;
-
-let current_mode = ref None;; (* !current_mode : mode *)
+let current_mode = ref Read;; (* !current_mode : mode *)
 
 let local_file = ref None;; (* !local_file : file_descr *)
-
-let last_packet = ref Bytes.empty;;
-
-let finished = ref false;;
 
 (* Program arguments *)
 
 let set_mode new_mode = 
   current_mode := match new_mode with
-    | "read"  -> Some Read
-    | "write" -> Some Write
+    | "read"  -> Read
+    | "write" -> Write
     | _       -> exit_err "invalid file mode: must be read or write"
 ;;
 
 let args = [
-  ("-a", Arg.String (assign_opt address), "The address of the server.");
-  ("-i", Arg.String (assign_opt in_file_name), "The name of the input file.");
-  ("-o", Arg.String (assign_opt out_file_name), "The name of the input file.");
+  ("-a", Arg.String ((:=) address), "The address of the server.");
+  ("-i", Arg.String ((:=) in_file), "The name of the input file.");
+  ("-o", Arg.String ((:=) out_file), "The name of the input file.");
   ("-m", Arg.String set_mode, "The mode of file transfer, \"read\" or \"write\".")
 ];;
 
+(* Coq datatypes interface *)
+
+(* From http://caml.inria.fr/pub/old_caml_site/FAQ/FAQ_EXPERT-eng.html#strings *)
+let explode (s : string) : char list =
+  let rec exp i l =
+    if i < 0 then l else exp (i - 1) (s.[i] :: l) in
+  exp (String.length s - 1) [];;
+
+(* From https://stackoverflow.com/questions/29957418/how-to-convert-char-list-to-string-in-ocaml *)
+let implode (cl : char list) : string = String.concat "" (List.map (String.make 1) cl);;
+
 (* Network communication *)
+(* TODO: prove that port is always set if SEND_PACKET
+         prove that length of orders is 1 or 0 *)
+let send_bytes (fd : file_descr) (addr : sockaddr) (pac : char list) =
+    let packet = implode pac in
+    handle_unix_error sendto_substring fd packet 0 (String.length packet) [] addr;;
 
-let default_mode = "netascii";;
+let modify_port (addr : sockaddr) p : sockaddr =
+    match addr with
+    | ADDR_INET (addr_inet, _) -> ADDR_INET (addr_inet, int_of_pos p);;
 
-(* ONLY FOR TESTING!!! *)
-type opcode_type = RRQ | WRQ | DATA | ACK | ERROR;;
+let write_to_file (contents : char list) =
+    handle_unix_error write_substring (unwrap !local_file) (implode contents) 0 (List.length contents);;
 
-let opcode_to_int t =
-  match t with
-    | RRQ   -> 1
-    | WRQ   -> 2
-    | DATA  -> 3
-    | ACK   -> 4
-    | ERROR -> 5
-;;
+let sockaddr_to_port (addr : sockaddr) =
+    match addr with
+    | ADDR_INET (_, p) -> p
+    | _ -> exit_err "Invalid address type.";;
 
-let int_to_opcode num = 
-  match num with
-    | 1 -> RRQ
-    | 2 -> WRQ
-    | 3 -> DATA
-    | 4 -> ACK
-    | _ -> ERROR
-;;
-(* ONLY FOR TESTING!!! *)
+(*
+Definition coq_process_packet (pack : string) (st : state) (p : positive) (timeout : bool) : result.
+coq_init (rw_mode : mode) (in_file : string) (out_file : string) : result
+*)
 
+let init : result = coq_init !current_mode (explode !in_file) (explode !out_file);;
 
-let create_init_packet file_name opcode = 
-  let name_len = String.length file_name in
-  let packet = Bytes.create (2 + name_len + 1 + String.length default_mode + 1) in
-    Bytes.set packet 0 '\000';
-    Bytes.set packet 1 (Char.chr (opcode_to_int opcode));
-    Bytes.blit_string file_name 0 packet 2 name_len;
-    Bytes.set packet (2 + name_len) '\000';
-    Bytes.blit_string default_mode 0 packet (2 + name_len + 1) (String.length default_mode);
-    Bytes.set packet (Bytes.length packet - 1) '\000';
-    packet
-;;
-
-let send_init fd addr = 
-  let packet = if !current_mode = Read then
-      create_init_packet in_file_name RRQ 
-    else 
-      create_init_packet out_file_name WRQ 
-  in
-    handle_unix_error sendto fd packet 0 (Bytes.length packet) [] addr;
-    ()
-;;
-
-let receive_response fd =
+let receive_response fd old_addr =
   let buffer = Bytes.create max_packet_len in
-  let len, _ = handle_unix_error recvfrom fd buffer 0 max_packet_len [] in
-    (len, buffer)
-;;
+  try let (len, addr) = recvfrom fd buffer 0 max_packet_len [] in
+    (addr, Bytes.sub_string buffer 0 len, false)
+  with Unix_error EAGAIN _ _ -> (old_addr, "", true);;
 
-let process_response fd addr response = 
-  match coq_advance_state response 
-;;
+let process_result (fd : file_descr) (addr : sockaddr) (res : result) =
+  let st = new_state res in
+  List.iter (
+    fun order -> match order with
+      | SEND_PACKET -> send_bytes fd (modify_port addr (unwrap (port st))) (packet_to_send res)
+      | WRITE_CONTENTS -> write_to_file (file_contents st)
+      | PRINT -> printf (implode (packet_to_send res))
+      | SEND_TO p -> send_bytes fd (modify_port addr p) (packet_to_send res)
+    ) (orders st);
+  st;;
+
+let main_loop (fd : file_descr) (addr : sockaddr) (st : state)  =
+    if not (finished st) then
+    let (rec_addr, pac, timeout) = handle_unix_error receive_response fd addr in
+    let res = coq_process_packet (explode pac) (BinPos.of_int (sockaddr_to_port rec_addr)) timeout in
+    main_loop fd addr (process_result fd addr res);;
 
 let run_client info = 
   (* type addr_info = { 
@@ -122,29 +114,23 @@ let run_client info =
      ai_addr : sockaddr; 
      ai_canonname : string } *)
   let sock_fd = handle_unix_error socket info.ai_family info.ai_socktype info.ai_protocol in
-    send_init fd info.ai_addr;
-    while not !finished do
-      let response = match select [] [sock_fd] [] 5.0 with
-        | ([], [_], []) -> receive_response sock_fd
-        | _ -> exit_err "The server timed out."
-      in process_response fd info.ai_addr response
-    done
-;;
-
-let first_ok f l = 
-  match l with 
-    | []     -> exit_err "Unknown error."
-    | h :: t -> if not (f h) then first_ok f t
-;;
+    setsockopt_float sock_fd SO_RCVTIMEO 1.0;
+    main_loop sock_fd (ai_addr info) (process_result sock_fd (ai_addr info) init);
+    ;;
 
 let main () = 
-  Arg.parse args (_ -> ()) "A simple TFTP client written in Coq written by Jacek Olczyk.";
+  Arg.parse args (fun _ -> ()) "A simple TFTP client written in Coq written by Jacek Olczyk.";
   (*if !port < 0 || 65536 < !port then exit_err In*)
   if !mode = Read then 
-    assign_opt local_file (handle_unix_error openfile !out_file_name [O_WRONLY; O_CREAT; O_EXCL] 0o755)
-  else 
-    assign_opt local_file (handle_unix_error openfile !in_file_name [O_RDONLY] 0);
-  let addr_list = handle_unix_error getaddrinfo !address !port 
+    assign_opt local_file (handle_unix_error openfile !out_file [O_WRONLY; O_CREAT; O_EXCL] 0o755)
+  else begin
+    assign_opt local_file (handle_unix_error openfile !in_file [O_RDONLY] 0);
+    let max_file_len = 512 * 256 * 256 + 1 in
+    let buf = Bytes.create max_file_len in
+    handle_unix_error read (unwrap local_file) buf 0 max_file_len;
+    in_file := Bytes.to_string buf
+  end;
+  let addr_list = handle_unix_error getaddrinfo !address 69
                     [AI_FAMILY PF_INET; AI_SOCKTYPE SOCK_DGRAM] in
-    first_ok run_client addr_list
+    run_client (head addr_list)
 ;;
