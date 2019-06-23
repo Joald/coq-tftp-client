@@ -121,7 +121,7 @@ Open Scope program_scope.
 Definition request_retransmit (st : state) : result := 
   if did_retransmit st
     then mkResult "The server timed out." 
-      ((change_orders [PRINT] \u2218 change_did_retransmit true \u2218 change_finished true \u2218 change_file_contents "") st)
+      ((change_orders [PRINT] ∘ change_did_retransmit true ∘ change_finished true ∘ change_file_contents "") st)
     else mkResult 
       (serialize_packet (last_packet st))
       (mkState [SEND_PACKET] (transfer_mode st) (port st) (last_packet st) (last_block_id st) true (finished st) (file_contents st)).
@@ -767,45 +767,3 @@ case_eq (num + 1 ?= two_bytes_range_size)...
   magics.
 Qed.
 
-
-(*  error przechodzi w error
-stan ko\u0144cowy przechodzi w error
-jak odbior\u0119 blok < 512 to wchodz\u0119 w ko\u0144cowy
-je\u015bli port jest ustalony to on si\u0119 nie zmienia
-wysy\u0142any ack ro\u015bnie o 1 po otrzymaniu pakietu
-gdy wy\u015bl\u0119 ca\u0142y plik to ko\u0144cz\u0119
-po zaackowaniu bloku m\u00f3j licznik wys\u0142anych blok\u00f3w ro\u015bnie
-Nie mam asercji na to jaki pakiet wysy\u0142am chyba
-*)
-
-
-
-(*
-Definition coq_process_packet 
-  (pack : string) 
-  (st : state) (p : positive) (timeout : bool) : result.
-
-Inductive packet : Set := 
-| p_RRQ : string -> packet                  (* Filename *)
-| p_WRQ : string -> packet                  (* Filename *)
-| p_DATA : forall (x : N), x < two_bytes_range_size -> string -> packet     (* Block #, Data *)
-| p_ACK : forall (x : N), x < two_bytes_range_size -> packet                (* Block # *)
-| p_ERROR : error_code -> string -> packet. (* ErrorCode, ErrMsg *)
-
-Record state : Set := mkState {
-  orders : list directive;
-  transfer_mode : mode;
-  port: option positive;
-  last_packet : packet;
-  did_retransmit : bool;
-  finished : bool;
-  file_contents : string;
-}.
-Record result := mkResult {
-  (* the packet that the client needs to send next *)
-  packet_to_send : string; 
-
-  (* next state *)
-  new_state : state;
-}.
-*)

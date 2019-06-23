@@ -1,8 +1,8 @@
 
 coq_grep: extract
-	ocamlbuild uniq.byte
+	ocamlbuild main.byte
 
-extract: extraction.v Coq_uniq.vo
+extract: extraction.v client.vo
 	coqtop -batch -load-vernac-source $<
 
 %.vo: %.v
