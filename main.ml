@@ -1,5 +1,3 @@
-let std_out = stdout;;
-
 open Unix
 open Printf
 open Client
@@ -44,8 +42,8 @@ let local_file = ref None;; (* !local_file : file_descr *)
 
 let set_mode new_mode = 
   current_mode := match new_mode with
-    | "read"  -> printf "mode: read\n"; Read
-    | "write" -> printf "mode: write\n"; Write
+    | "read"  -> Read
+    | "write" -> Write
     | _       -> exit_err "invalid file mode: must be read or write"
 ;;
 
@@ -85,11 +83,6 @@ let sockaddr_to_port (addr : sockaddr) =
     | ADDR_INET (_, p) -> p
     | _ -> exit_err "Invalid address type.";;
 
-(*
-Definition coq_process_packet (pack : string) (st : state) (p : positive) (timeout : bool) : result.
-coq_init (rw_mode : mode) (in_file : string) (out_file : string) : result
-*)
-
 let init = lazy (coq_init !current_mode (explode !in_file) (explode !out_file));;
 
 let receive_response fd old_addr =
@@ -104,24 +97,16 @@ let process_result (fd : file_descr) (addr : sockaddr) (res : result) =
     fun order -> ignore (match order with
       | SEND_PACKET    -> send_bytes fd (modify_port addr (default (pos_of_int 69) st.port)) res.packet_to_send
       | WRITE_CONTENTS -> write_to_file st.file_contents
-      | PRINT          -> printf "PRINTING: %s\n" (implode res.packet_to_send); 0
+      | PRINT          -> printf "ERROR: %s\n" (implode res.packet_to_send); 0
       | SEND_TO p      -> send_bytes fd (modify_port addr p) res.packet_to_send
     )) st.orders;
   st;;
 
 let rec main_loop (fd : file_descr) (addr : sockaddr) (st : state)  =
   if not st.finished then begin
-    printf "Main loop!!\nThe port is %d\n" (int_of_pos (default (pos_of_int 666) st.port));
-    flush std_out;
     let (rec_addr, pac, timeout) = handle_unix_error receive_response fd addr in
-    printf "Processing packet! The last block nr is %d\n remaining file length: %d" (int_of_n st.last_block_id) (int_of_n (n_strlen st.file_contents (n_of_int 0)));
-    flush std_out;
     let res = coq_process_packet (explode pac) st (pos_of_int (sockaddr_to_port rec_addr)) timeout in
-    printf "Processed packet!\n";
-    flush std_out;
     let new_st = process_result fd addr res in
-    printf "Processed result!\n";
-        flush std_out;
       main_loop fd addr new_st
   end;;
 
@@ -143,8 +128,6 @@ let main () =
     let size = handle_unix_error read (unwrap !local_file) buf 0 max_file_len in
     in_file := Bytes.sub_string buf 0 size;
   end;
-  printf "File opened!\n";
-  Printexc.record_backtrace false;
   let addr_list = handle_unix_error getaddrinfo !address "69"
                     [AI_FAMILY PF_INET; AI_SOCKTYPE SOCK_DGRAM] in
     run_client (List.hd addr_list)
