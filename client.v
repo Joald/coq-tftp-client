@@ -5,6 +5,9 @@ Require Import ZArith.
 Require Import String.
 Require Import Bool.
 
+Require Import Coq.NArith.Nnat.
+
+
 AddPath "/Users/joald/wwk/client" as.
 
 Load packet.
@@ -123,10 +126,10 @@ Definition request_retransmit (st : state) : result :=
       (serialize_packet (last_packet st))
       (mkState [SEND_PACKET] (transfer_mode st) (port st) (last_packet st) (last_block_id st) true (finished st) (file_contents st)).
 
-Definition send_bytes (st : state) (byte_count : nat) : forall new_id, new_id < two_bytes_range_size -> result := fun new_id prop =>
+Definition send_bytes (st : state) (byte_count : nat) (new_id : N) : result :=
   let to_send := substring 0 byte_count (file_contents st) in
   let rest    := substring byte_count (length (file_contents st) - byte_count) (file_contents st) in
-  let pac     := p_DATA new_id prop to_send in
+  let pac     := p_DATA new_id to_send in
   mkResult
     (serialize_packet pac)
     (mkState [SEND_PACKET] Write (port st) pac new_id false (N_of_nat byte_count <? 512) rest).
@@ -160,8 +163,7 @@ destruct (deserialize_packet pack).
   - exact (illegal_operation "Cannot send read requests to client." st).
   - exact (illegal_operation "Cannot send write requests to client." st).
   - (* p_DATA *)
-    remember x as nr.
-    remember l as prop.
+    remember n as nr.
     remember s as data.
 
     refine (
@@ -181,45 +183,32 @@ destruct (deserialize_packet pack).
       if negb (N_of_nat (length data) =? 512)
         then mkResult "" (mkState [WRITE_CONTENTS] Read (port st) 
           (last_packet st) nr false true (file_contents st ++ data))
-        else let pac := (p_ACK nr prop) in
+        else let pac := (p_ACK nr) in
           mkResult (serialize_packet pac)
-            (mkState [SEND_PACKET] Read (Some p) pac nr 
+            (mkState [SEND_PACKET] Read (port st) pac nr 
                 false false (file_contents st ++ data))
     ).
   - (* p_ACK *)
-    remember x as nr.
+    remember n as nr.
     refine (
       match transfer_mode st with
       | Read => illegal_operation "Cannot receive data in write mode." st
       | Write => _
       end
     ).
-    case_eq (two_bytes_range_size ?= nr + 1).
-    * intro.
-      exact (illegal_operation "File too large." st).
-    * intro.
-      exact (illegal_operation "File too large." st).
-    * intro.
-      assert (nr + 1 < two_bytes_range_size).
-      { apply (N.compare_gt_iff two_bytes_range_size (nr + 1)).
-        assumption. }
-      remember (N_of_nat (length (file_contents st))) as CL.
-      case_eq (CL ?= 512).
-      -- intro.
-         assert (CL = 512).
-         { apply (N.compare_eq_iff CL 512).
-           assumption. }
-         exact (send_bytes st 512 (nr + 1) H0).
-      -- intro.
-         assert (CL < 512).
-         { apply (N.compare_lt_iff CL 512).
-           assumption. } 
-         exact (send_bytes st (nat_of_N CL) (nr + 1) H0).
-      -- intro.
-         assert (512 < CL).
-         { apply (N.compare_gt_iff CL 512).
-           assumption. } 
-         exact (send_bytes st 512 (nr + 1) H0).
+    refine (
+      if nr =? last_block_id st + 1
+        then _
+        else illegal_operation "Incorrect block number." st
+    ).
+    destruct (two_bytes_range_size ?= nr + 1).
+    * exact (illegal_operation "File too large." st).
+    * exact (illegal_operation "File too large." st).
+    * remember (N_of_nat (length (file_contents st))) as CL.
+      destruct (CL ?= 512).
+      -- exact (send_bytes st 512 (nr + 1)).
+      -- exact (send_bytes st (nat_of_N CL) (nr + 1)).
+      -- exact (send_bytes st 512 (nr + 1)).
   - (* p_ERROR *)
     remember s as err_msg.
     exact (
@@ -252,15 +241,15 @@ Definition normal_circumstances (st : state) (p : positive) (timeout : bool) : P
   timeout = false.
 
 
-Theorem finish_after_small_read : forall pac st p timeout num prop data,
+Theorem finish_after_small_read : forall pac st p timeout num data,
   normal_circumstances st p timeout -> 
   transfer_mode st = Read -> 
-  deserialize_packet pac = Some (p_DATA num prop data) ->
+  deserialize_packet pac = Some (p_DATA num data) ->
   num =? last_block_id st + 1 = true ->
   N_of_nat (length data) < 512 ->
   finished (new_state (coq_process_packet pac st p timeout)) = true.
 Proof with magic.
-intros pac st p timeout num prop data.
+intros pac st p timeout num data.
 intros Normal ReadMode PacketData BlockIDOK PacketSmall.
 unfold coq_process_packet...
 unfold normal_circumstances in Normal.
@@ -284,289 +273,270 @@ rewrite PacketIndeedSmall.
 magic.
 Qed.
 
-Theorem finish_after_small_write : forall pac st p timeout num prop,
+Theorem finish_after_small_write : forall pac st p timeout num,
   normal_circumstances st p timeout -> 
   transfer_mode st = Write -> 
-  deserialize_packet pac = Some (p_ACK num prop) ->
+  deserialize_packet pac = Some (p_ACK num) ->
   num = last_block_id st + 1 ->
   N_of_nat (length (file_contents st)) < 512 ->
   finished (new_state (coq_process_packet pac st p timeout)) = true.
 Proof with magic.
-intros pac st p timeout num prop.
+intros pac st p timeout num.
 intros Normal WriteMode PacketACK BlockIDOK PacketSmall.
 unfold coq_process_packet.
 unfold normal_circumstances in Normal.
 destruct Normal as [FinF [PortOK TimeoutF]].
-rewrite FinF.
-rewrite TimeoutF.
-rewrite PortOK.
-rewrite PacketACK.
-rewrite WriteMode.
-rewrite BlockIDOK.
-assert (last_block_id st + 1 < two_bytes_range_size).
-{ rewrite <- BlockIDOK... }
-unfold two_bytes_range_size in *.
-unfold N.compare in *.
-
-assert (exists m, last_block_id st + 1 + 1 = N.pos m).
-{ destruct (last_block_id st).
-  + simpl.
-    exists 2%positive...
-  + magics.
-    exists (p0 + 1 + 1)%positive...
-}
-destruct H0 as [x H0].
-rewrite H0.
-assert (N.pos x <= 65536).
-{ rewrite <- H0.
-  assert (forall x, x + 1 = N.succ x).
-  { magics. }
-  rewrite (H1 (last_block_id st + 1)).
-  apply (N.le_succ_l (last_block_id st + 1) 65536).
-  assumption.
-}
-assert (N.pos x ?= 65536 <> Gt).
-{ apply (N.compare_le_iff (N.pos x) 65536).
-  assumption. 
-}
-assert (N.pos x < 65536 \/ N.pos x = 65536) as X.
-{ apply (N.le_lteq (N.pos x) 65536). 
+rewrite FinF...
+rewrite TimeoutF...
+rewrite PortOK...
+rewrite PacketACK...
+rewrite WriteMode...
+rewrite BlockIDOK...
+assert (N_of_nat (length (file_contents st)) ?= 512 = Lt) as NL.
+{ apply (N.compare_lt_iff (N_of_nat (length (file_contents st))) 512).
   assumption. }
-destruct X as [X1 | X2]. 
-Close Scope N_scope.
-Open Scope positive_scope.
-* assert (65536 ?= x = Gt) as G.
-  { apply (Pos.compare_gt_iff 65536 x).
-    assumption. }
-
-
-Require Import Coq.Logic.FunctionalExtensionality.
-Require Import Coq.Logic.Eqdep_dec.
-(*  assert (
-   (fun pf : (65536 ?= x) = Gt =>
-      N.compare_gt_iff 65536 (N.pos x) pf
-   ) = (
-    fun pf : (65536 ?= x) = Gt =>
-      N.compare_gt_iff 65536 (N.pos x) G
-   )
-  ).*)
-  assert (
-    (fun H3 : (65536 ?= x) = Gt =>
-      match
-        match N.of_nat (length (file_contents st)) with
-        | 0%N => Lt
-        | N.pos n' => n' ?= 512
-        end as c
-        return
-          (match N.of_nat (length (file_contents st)) with
-           | 0%N => Lt
-           | N.pos n' => n' ?= 512
-           end = c -> result)
-      with
-      | Eq =>
-          fun
-            _ : match N.of_nat (length (file_contents st)) with
-                | 0%N => Lt
-                | N.pos n' => n' ?= 512
-                end = Eq =>
-          send_bytes st 512 (N.pos x)
-            (match N.compare_gt_iff 65536 (N.pos x) with
-             | conj H5 _ => H5
-             end H3)
-      | Lt =>
-          fun
-            _ : match N.of_nat (length (file_contents st)) with
-                | 0%N => Lt
-                | N.pos n' => n' ?= 512
-                end = Lt =>
-          send_bytes st
-            (N.to_nat (N.of_nat (length (file_contents st))))
-            (N.pos x)
-            (match N.compare_gt_iff 65536 (N.pos x) with
-             | conj H5 _ => H5
-             end H3)
-      | Gt =>
-          fun
-            _ : match N.of_nat (length (file_contents st)) with
-                | 0%N => Lt
-                | N.pos n' => n' ?= 512
-                end = Gt =>
-          send_bytes st 512 (N.pos x)
-            (match N.compare_gt_iff 65536 (N.pos x) with
-             | conj H5 _ => H5
-             end H3)
-      end eq_refl
-    ) = (fun H3 : (65536 ?= x) = Gt =>
-      match
-        match N.of_nat (length (file_contents st)) with
-        | 0%N => Lt
-        | N.pos n' => n' ?= 512
-        end as c
-        return
-          (match N.of_nat (length (file_contents st)) with
-           | 0%N => Lt
-           | N.pos n' => n' ?= 512
-           end = c -> result)
-      with
-      | Eq =>
-          fun
-            _ : match N.of_nat (length (file_contents st)) with
-                | 0%N => Lt
-                | N.pos n' => n' ?= 512
-                end = Eq =>
-          send_bytes st 512 (N.pos x)
-            (match N.compare_gt_iff 65536 (N.pos x) with
-             | conj H5 _ => H5
-             end G)
-      | Lt =>
-          fun
-            _ : match N.of_nat (length (file_contents st)) with
-                | 0%N => Lt
-                | N.pos n' => n' ?= 512
-                end = Lt =>
-          send_bytes st
-            (N.to_nat (N.of_nat (length (file_contents st))))
-            (N.pos x)
-            (match N.compare_gt_iff 65536 (N.pos x) with
-             | conj H5 _ => H5
-             end G)
-      | Gt =>
-          fun
-            _ : match N.of_nat (length (file_contents st)) with
-                | 0%N => Lt
-                | N.pos n' => n' ?= 512
-                end = Gt =>
-          send_bytes st 512 (N.pos x)
-            (match N.compare_gt_iff 65536 (N.pos x) with
-             | conj H5 _ => H5
-             end G)
-      end eq_refl
-    )
-  ).
-  { extensionality H3.
-    repeat f_equal.
-    intro.
-Local Close Scope positive_scope.
-Local Open Scope N_scope.
-    assert (N.of_nat (length (file_contents st)) ?= 512 = Lt).
-    { apply (N.compare_lt_iff (N.of_nat (length (file_contents st))) 512).
-      assumption. }
-    admit.
-  }
-  Check conj.
-  generalize ((65536 ?= x)%positive).
-  rewrite G.
-  ++++ intros ->.
-    generalize (eq_refl ( N16_to_N next_block + 1 ?= 256 * 256)).
-    revert H10.
-    case_eq (N16_to_N next_block + 1 ?= 256 * 256);
-      intros; unfold N.lt in H1; congruence + reflexivity.
-  ++++ extensionality pf.
-    f_equal.
-    f_equal.
-    apply UIP_dec.
-    decide equality.
-  rewrite G. (65536 ?= x = Gt).
-  magics.
-  
-  generalize dependent (65536 ?= x).
-  generalize (finished
-  (new_state
-     (match
-        65536 ?= x as c return ((65536 ?= x) = c -> result)
-      with
-      | Eq =>
-          fun _ : (65536 ?= x) = Eq =>
-          illegal_operation "File too large." st
-      | Lt =>
-          fun _ : (65536 ?= x) = Lt =>
-          illegal_operation "File too large." st
-      | Gt =>
-          fun H7 : (65536 ?= x) = Gt =>
-          match
-            match N.of_nat (length (file_contents st)) with
-            | 0%N => Lt
-            | N.pos n' => n' ?= 512
-            end as c
-            return
-              (match
-                 N.of_nat (length (file_contents st))
-               with
-               | 0%N => Lt
-               | N.pos n' => n' ?= 512
-               end = c -> result)
-          with
-          | Eq =>
-              fun
-                _ : match
-                      N.of_nat (length (file_contents st))
-                    with
-                    | 0%N => Lt
-                    | N.pos n' => n' ?= 512
-                    end = Eq =>
-              send_bytes st 512 (N.pos x)
-                (match N.compare_gt_iff 65536 (N.pos x) with
-                 | conj H9 _ => H9
-                 end H7)
-          | Lt =>
-              fun
-                _ : match
-                      N.of_nat (length (file_contents st))
-                    with
-                    | 0%N => Lt
-                    | N.pos n' => n' ?= 512
-                    end = Lt =>
-              send_bytes st
-                (N.to_nat
-                   (N.of_nat (length (file_contents st))))
-                (N.pos x)
-                (match N.compare_gt_iff 65536 (N.pos x) with
-                 | conj H9 _ => H9
-                 end H7)
-          | Gt =>
-              fun
-                _ : match
-                      N.of_nat (length (file_contents st))
-                    with
-                    | 0%N => Lt
-                    | N.pos n' => n' ?= 512
-                    end = Gt =>
-              send_bytes st 512 (N.pos x)
-                (match N.compare_gt_iff 65536 (N.pos x) with
-                 | conj H9 _ => H9
-                 end H7)
-          end eq_refl
-      end eq_refl)) = true).
-  rewrite G.
-  rewrite (N.compare_gt_iff 65536 (N.pos x)).
-assert (N.pos x ?= 65536 = Lt \/ N.pos x ?= 65536 = Eq).
-{ N.order. destruct H2.
-
-destruct (last_block_id st).
-
+rewrite NL.
+destruct (last_block_id st + 1 + 1).
 * magics.
-  
-  elim (length (file_contents st)).
-  + magics.
-  + magics.
-    destruct (Pos.of_succ_nat n ?= 512)%positive.
-    - magics.
-      exfalso.
-      
-destruct H as [m Hm].
-magics.
-rewrite Hm...
-assert (negb (N.of_nat (length data) =? 512) = true) as PacketIndeedSmall.
-{ unfold negb.
-  cut (N.of_nat (length data) =? 512 = false).
-  { magics. rewrite H... }
-  Search (_ =? _).
-  apply (N.eqb_neq (N.of_nat (length data)) 512 ).
-  magics.
-}
-rewrite PacketIndeedSmall.
-magic.
+  rewrite (nat_of_N_of_nat (length (file_contents st))).
+  rewrite (N.eqb_refl _).
+  magic.
+  rewrite (N.ltb_compare (N.of_nat (length (file_contents st))) 512).
+  rewrite NL.
+  magic.
+* magics. 
+  destruct ((65536 ?= p0)%positive).
+  + rewrite (N.eqb_refl _).
+    magics.
+  + rewrite (N.eqb_refl _).
+    magics.
+  + rewrite (N.eqb_refl _).
+    magics.
+    rewrite (nat_of_N_of_nat (length (file_contents st))).
+    rewrite (N.ltb_compare (N.of_nat (length (file_contents st))) 512).
+    rewrite NL.
+    magic.
 Qed.
+
+Theorem port_stays_the_same : forall pac st p timeout old_port,
+  port st = Some old_port ->
+  port (new_state (coq_process_packet pac st p timeout)) = Some old_port.
+Proof with magic.
+intros pac st p timeout old_port.
+intros PortWasSet.
+unfold coq_process_packet.
+destruct (finished st).
+{ magics. }
+destruct timeout.
+{ magics. 
+  unfold request_retransmit.
+  destruct (did_retransmit st).
+  + magics.
+  + magics. }
+destruct (port_is_bad st p).
+{ magics. }
+destruct (deserialize_packet pac)...
+destruct p0; magics;
+destruct (transfer_mode st); magics;
+destruct (n =? last_block_id st + 1)...
+* destruct (negb (N.of_nat (length s) =? 512))...
+* destruct (n + 1)...
+  -- destruct (N.of_nat (length (file_contents st)) ?= 512)...
+  -- destruct (65536 ?= p0)%positive...
+     destruct (N.of_nat (length (file_contents st)) ?= 512)...
+Qed.
+
+Theorem bad_data_block_id_errors : forall pac st p p2 timeout num data,
+  normal_circumstances st p timeout -> 
+  transfer_mode st = Read -> 
+  deserialize_packet pac = Some (p_DATA num data) ->
+  num <> last_block_id st + 1 ->
+  let res := coq_process_packet pac st p timeout in
+    deserialize_packet (packet_to_send res) = Some p2 ->
+      match p2 with (p_ERROR _ _) => True | _ => False end
+    /\ finished (new_state res) = true.
+Proof with magic.
+intros pac st p p2 timeout num data.
+intros Normals ReadMode GotData BadBlockID res.
+unfold res.
+clear res.
+unfold coq_process_packet.
+destruct Normals as [NotFin [PortOK NoTimeout]].
+rewrite NotFin.
+rewrite NoTimeout.
+rewrite PortOK.
+rewrite GotData.
+rewrite ReadMode.
+assert (num =? last_block_id st + 1 = false) as NEQ.
+{ rewrite (N.eqb_compare num (last_block_id st + 1)).
+  case_eq (num ?= last_block_id st + 1).
+  - intro.
+    exfalso.
+    apply BadBlockID.
+    apply (N.compare_eq_iff num (last_block_id st + 1)).
+    assumption.
+  - magic.
+  - magic. }
+rewrite NEQ.
+magic.
+simpl in H.
+inversion H.
+auto.
+Qed.
+
+Theorem correctly_acking_correct_nonfinal_packets : forall pac st p p2 timeout num data,
+  normal_circumstances st p timeout -> 
+  transfer_mode st = Read ->
+  deserialize_packet pac = Some (p_DATA num data) ->
+  num = last_block_id st + 1 ->
+  N_of_nat (length data) = 512 -> 
+  let res := coq_process_packet pac st p timeout in
+     In SEND_PACKET (orders (new_state res))
+  /\ (deserialize_packet (packet_to_send res) = Some p2 ->
+  match p2 with
+  | p_ACK ack_nr => ack_nr = num
+  | _ => False
+  end).
+Proof with magic.
+intros pac st p p2 timeout num data.
+intros Normals ReadMode GotData GoodBlockID NonFinalPacket res.
+unfold res.
+unfold coq_process_packet.
+destruct Normals as [NotFin [PortOK NoTimeout]].
+rewrite NotFin.
+rewrite NoTimeout.
+rewrite PortOK.
+rewrite GotData.
+rewrite ReadMode.
+rewrite NonFinalPacket.
+assert (num =? last_block_id st + 1 = true) as NumEq.
+{ rewrite (N.eqb_compare num (last_block_id st + 1)).
+  assert ((num ?= last_block_id st + 1) = Eq).
+  { rewrite (N.compare_eq_iff num (last_block_id st + 1)).
+    assumption. }
+  rewrite H. 
+  magic. }
+rewrite NumEq.
+case_eq (negb (N.of_nat (length data) =? 512))...
+* magic.
+* simpl in H0.
+  inversion H0.
+  rewrite (N_ascii_embedding _).
+  rewrite (N_ascii_embedding _).
+  symmetry.
+  rewrite (N.mul_comm (num / byte_range_size) byte_range_size).
+  apply (N.div_mod _ _).
+  + magic.
+  + unfold byte_range_size.
+    apply (N.mod_bound_pos _ _).
+    - apply (N.le_0_l _).
+    - magic.
+  + unfold byte_range_size.
+    assert (256 * (num / 256) <= 256 * num / 256).
+    { rewrite (N.mul_comm 256 num).
+      rewrite (N.div_mul num 256).
+      rewrite (N.mul_div_le num 256).
+      apply (N.le_refl _)...
+      + magic.
+      + magic. }
+    assert (256 * num / 256 < 256 * 256).
+    { assert (num < 65536).
+      { apply (deserialized_num_less_than_two_byte_size pac num data). 
+        assumption. }
+      rewrite (N.mul_comm 256 num).
+      rewrite (N.div_mul _ _)... }
+    magics.
+* magics.
+* simpl in H0.
+  inversion H0.
+  rewrite (N_ascii_embedding _).
+  rewrite (N_ascii_embedding _).
+  unfold byte_range_size.
+  rewrite (N.mul_comm _ 256).
+  rewrite <- (N.div_mod num 256)...
+  + apply (N.mod_bound_pos _ _).
+    - apply (N.le_0_l _).
+    - magic.
+  + unfold byte_range_size.
+    assert (256 * (num / 256) <= 256 * num / 256).
+    { rewrite (N.mul_comm 256 num).
+      rewrite (N.div_mul num 256).
+      rewrite (N.mul_div_le num 256).
+      apply (N.le_refl _)...
+      + magic.
+      + magic. }
+    assert (256 * num / 256 < 256 * 256).
+    { assert (num < 65536).
+      { apply (deserialized_num_less_than_two_byte_size pac num data). 
+        assumption. }
+      rewrite (N.mul_comm 256 num).
+      rewrite (N.div_mul _ _)... }
+    magics.
+Qed.
+
+Theorem bad_ack_block_id_errors : forall pac st p p2 timeout num,
+  normal_circumstances st p timeout -> 
+  transfer_mode st = Write ->
+  deserialize_packet pac = Some (p_ACK num) ->
+  num <> last_block_id st + 1 ->
+  let res := coq_process_packet pac st p timeout in
+     [SEND_PACKET] = (orders (new_state res))
+  /\ (deserialize_packet (packet_to_send res) = Some p2 ->
+  match p2 with
+  | p_ERROR _ _ => True
+  | _ => False
+  end).
+Proof with magic.
+intros pac st p p2 timeout num.
+intros Normals WriteMode GotAck BadBlockID res.
+unfold res.
+unfold coq_process_packet.
+destruct Normals as [NotFin [PortOK NoTimeout]].
+rewrite NotFin.
+rewrite NoTimeout.
+rewrite PortOK.
+rewrite GotAck.
+rewrite WriteMode. 
+destruct (two_bytes_range_size ?= num + 1)...
+* case_eq (num =? last_block_id st + 1)...
+* unfold deserialize_packet in H...
+  unfold illegal_operation in H...
+  simpl in H...
+  case_eq (num =? last_block_id st + 1)...
+  + rewrite H0 in H...
+    simpl in H...
+    inversion H...
+  + rewrite H0 in H...
+    simpl in H...
+    inversion H...
+* case_eq (num =? last_block_id st + 1)...
+* case_eq (num =? last_block_id st + 1)...
+  + rewrite H0 in H...
+    unfold deserialize_packet in H...
+    unfold illegal_operation in H...
+    simpl in H...
+    inversion H...
+  + rewrite H0 in H...
+    unfold deserialize_packet in H...
+    unfold illegal_operation in H...
+    simpl in H...
+    inversion H...
+* case_eq (num =? last_block_id st + 1)...
+  case_eq (N.of_nat (length (file_contents st)) ?= 512)...
+* case_eq (num =? last_block_id st + 1)...
+  + rewrite H0 in H...
+    exfalso.
+    apply BadBlockID.
+    apply (Neqb_ok num (last_block_id st + 1)).
+    assumption.
+  + rewrite H0 in H...
+    unfold illegal_operation in H...
+    simpl in H...
+    inversion H...
+Qed.
+
+
+
 (*  error przechodzi w error
 stan ko\u0144cowy przechodzi w error
 jak odbior\u0119 blok < 512 to wchodz\u0119 w ko\u0144cowy

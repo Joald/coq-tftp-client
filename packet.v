@@ -20,8 +20,8 @@ Local Open Scope N_scope.
 Inductive packet : Set := 
 | p_RRQ : string -> packet                  (* Filename *)
 | p_WRQ : string -> packet                  (* Filename *)
-| p_DATA : forall (x : N), x < two_bytes_range_size -> string -> packet     (* Block #, Data *)
-| p_ACK : forall (x : N), x < two_bytes_range_size -> packet                (* Block # *)
+| p_DATA : N -> string -> packet            (* Block #, Data *)
+| p_ACK : N -> packet                       (* Block # *)
 | p_ERROR : error_code -> string -> packet. (* ErrorCode, ErrMsg *)
 
 
@@ -51,8 +51,8 @@ Definition serialize_packet (p : packet) : string :=
   match p with
   | p_RRQ filename => opcode_to_string RRQ ++ null_terminate filename ++ null_terminate "octet"
   | p_WRQ filename => opcode_to_string WRQ ++ null_terminate filename ++ null_terminate "octet"
-  | p_DATA block_no _ data => opcode_to_string DATA ++ word_no_to_string block_no ++ data
-  | p_ACK block_no _ => opcode_to_string ACK ++ word_no_to_string block_no
+  | p_DATA block_no data => opcode_to_string DATA ++ word_no_to_string block_no ++ data
+  | p_ACK block_no => opcode_to_string ACK ++ word_no_to_string block_no
   | p_ERROR err_code err_msg => opcode_to_string ERROR ++ err_code_to_string err_code ++ null_terminate err_msg
   end.
 
@@ -89,14 +89,12 @@ Proof.
 (* DATA *)
 * remember (string_to_word_no s) as X.
   destruct X.
-  + refine (Some (p_DATA n (string_to_word_no_in_range s n _) rest2)).
-    auto.
+  + refine (Some (p_DATA n rest2)).
   + exact None.
 (* ACK *)
 * remember (string_to_word_no s) as X.
   destruct X.
-  + refine (Some (p_ACK n (string_to_word_no_in_range s n _))).
-    auto.
+  + refine (Some (p_ACK n)).
   + exact None.
 (* ERROR *)
 * remember (string_to_word_no s) as X.
@@ -130,8 +128,8 @@ Theorem data_serial_ident :
   forall s s2 : string, 
   forall H : x < two_bytes_range_size,
   forall H2 : x2 < two_bytes_range_size,
-  match deserialize_packet (serialize_packet (p_DATA x H s)) with 
-  | Some (p_DATA x2 H2 s2) => x = x2 /\ s = s2
+  match deserialize_packet (serialize_packet (p_DATA x s)) with 
+  | Some (p_DATA x2 s2) => x = x2 /\ s = s2
   | Some _ => False
   | None => True
   end.
@@ -169,8 +167,8 @@ Theorem ack_serial_ident :
   forall s s2 : string, 
   forall H : x < two_bytes_range_size,
   forall H2 : x2 < two_bytes_range_size,
-  match deserialize_packet (serialize_packet (p_ACK x H)) with 
-  | Some (p_ACK x2 H2) => x = x2
+  match deserialize_packet (serialize_packet (p_ACK x)) with 
+  | Some (p_ACK x2) => x = x2
   | Some _ => False
   | None => True
   end.
@@ -195,7 +193,7 @@ rewrite (N_ascii_embedding (x / 256)).
         rewrite (N.div_mul x 256).
         rewrite (N.mul_div_le x 256)...
         easy. } 
-    magics. 
+      magics. 
     + magic. }
   rewrite (N.mul_comm 256 x).
   rewrite (N.div_mul x 256)...
@@ -204,4 +202,84 @@ Qed.
 Theorem error_serial_ident : forall err s, deserialize_packet (serialize_packet (p_ERROR err s)) = Some (p_ERROR err s).
 Proof with magics.
 destruct err; magic; rewrite (null_determination s)...
+Qed.
+
+Theorem deserialized_num_less_than_two_byte_size : forall pac num data,
+  deserialize_packet pac = Some (p_DATA num data) ->
+  num < two_bytes_range_size.
+Proof with magic.
+intros.
+unfold deserialize_packet in H.
+destruct pac...
+destruct pac...
+destruct (ascii_to_opcode a0)...
+destruct p...
+* destruct pac...
+  destruct pac...
+  case_eq (string_to_word_no (two_ascii_to_string a1 a2)).
+  + intros.
+    assert (n < two_bytes_range_size).
+    { apply (string_to_word_no_in_range (two_ascii_to_string a1 a2) n).
+      assumption. }
+    rewrite H0 in H.
+    inversion H.
+    rewrite H3 in H1.
+    assumption.
+  + magics.
+* destruct pac...
+  destruct pac...
+  destruct pac...
+* destruct pac...
+  destruct pac...
+  case_eq (string_to_word_no (two_ascii_to_string a1 a2)).
+  + intros.
+    assert (n < two_bytes_range_size).
+    { apply (string_to_word_no_in_range (two_ascii_to_string a1 a2) n).
+      assumption. }
+    rewrite H0 in H.
+    inversion H.
+    destruct (nr_to_err_code n).
+    - magics.
+    - magics.
+  + magics.
+Qed.
+
+Theorem deserialized_num_less_than_two_byte_size_but_its_ack : forall pac num,
+  deserialize_packet pac = Some (p_ACK num) ->
+  num < two_bytes_range_size.
+Proof with magic.
+intros.
+unfold deserialize_packet in H.
+destruct pac...
+destruct pac...
+destruct (ascii_to_opcode a0)...
+destruct p...
+* destruct pac...
+  destruct pac...
+* destruct pac...
+  destruct pac...
+  destruct pac...
+  case_eq (string_to_word_no (two_ascii_to_string a1 a2)).
+  + intros.
+    assert (n < two_bytes_range_size).
+    { apply (string_to_word_no_in_range (two_ascii_to_string a1 a2) n).
+      assumption. }
+    rewrite H0 in H.
+    inversion H.
+    rewrite H3 in H1.
+    assumption.
+  + magics.
+* destruct pac...
+  destruct pac...
+  case_eq (string_to_word_no (two_ascii_to_string a1 a2)).
+  + intros.
+    assert (n < two_bytes_range_size).
+    { apply (string_to_word_no_in_range (two_ascii_to_string a1 a2) n).
+      assumption. }
+    rewrite H0 in H.
+    inversion H.
+    destruct (nr_to_err_code n).
+    - magics.
+    - magics.
+  + magics.
 Qed.
