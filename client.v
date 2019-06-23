@@ -6,7 +6,7 @@ Require Import String.
 Require Import Bool.
 
 Require Import Coq.NArith.Nnat.
-
+AddPath "/Users/joald/wwk/client" as.
 Load packet.
 
 Open Scope list_scope.
@@ -30,6 +30,9 @@ Record state : Set := mkState {
 
 Definition change_orders (ords : list directive) (st : state) : state :=
   mkState ords (transfer_mode st) (port st) (last_packet st) (last_block_id st) (did_retransmit st) (finished st) (file_contents st).
+
+Definition change_port (p : positive) (st : state) : state :=
+  mkState (orders st) (transfer_mode st) (Some p) (last_packet st) (last_block_id st) (did_retransmit st) (finished st) (file_contents st).
 
 Definition change_last_packet (lp : packet) (st : state) : state :=
   mkState (orders st) (transfer_mode st) (port st) lp (last_block_id st) (did_retransmit st) (finished st) (file_contents st).
@@ -105,9 +108,9 @@ Theorem init_when_writing_file_contents_is_infile : forall infil outfil,
   file_contents (new_state (coq_init Write infil outfil)) = infil.
 Proof. magic. Qed.
 
-Definition illegal_operation (err_msg : string) (st : state) : result := mkResult
+Definition illegal_operation (err_msg : string) (st : state) (p : option positive) : result := mkResult
   (serialize_packet (p_ERROR ILLEGAL_TFTP_OPERATION err_msg))
-  (mkState [SEND_PACKET] (transfer_mode st) (port st) (last_packet st) (last_block_id st) false true "").
+  (mkState [SEND_PACKET] (transfer_mode st) p (last_packet st) (last_block_id st) false true "").
 
 Definition wrong_source_port (st : state) (p : positive) : result := mkResult 
   (serialize_packet (p_ERROR UNKNOWN_TRANSFER_ID ""))
@@ -118,18 +121,18 @@ Open Scope program_scope.
 Definition request_retransmit (st : state) : result := 
   if did_retransmit st
     then mkResult "The server timed out." 
-      ((change_orders [PRINT] ∘ change_did_retransmit true ∘ change_finished true ∘ change_file_contents "") st)
+      ((change_orders [PRINT] \u2218 change_did_retransmit true \u2218 change_finished true \u2218 change_file_contents "") st)
     else mkResult 
       (serialize_packet (last_packet st))
-      (mkState [SEND_PACKET] (transfer_mode st) (port st) (last_packet st) (last_block_id st) true (finished st) (file_contents st)).
+      ((change_orders [PRINT] \u2218 change_did_retransmit true) st).
 
-Definition send_bytes (st : state) (byte_count : nat) (new_id : N) : result :=
+Definition send_bytes (st : state) (p : option positive) (byte_count : nat) (new_id : N) : result :=
   let to_send := substring 0 byte_count (file_contents st) in
   let rest    := substring byte_count (length (file_contents st) - byte_count) (file_contents st) in
   let pac     := p_DATA new_id to_send in
   mkResult
     (serialize_packet pac)
-    (mkState [SEND_PACKET] Write (port st) pac new_id false (N_of_nat byte_count <? 512) rest).
+    (mkState [SEND_PACKET] Write p pac new_id false (N_of_nat byte_count <? 512) rest).
 
 Definition port_is_bad (st : state) (p : positive) : bool :=
   match port st with 
@@ -137,9 +140,16 @@ Definition port_is_bad (st : state) (p : positive) : bool :=
   | Some p2 => negb (Pos.eqb p p2)
   end.
 
+Definition no_port_set (st : state) : bool :=
+  match port st with
+  | None => true
+  | _ => false
+  end.
+
 Definition coq_process_packet (pack : string) (st : state) (p : positive) (timeout : bool) : result.
 Proof.
 Open Scope positive_scope.
+refine (let op := Some p in _).
 refine (
   if finished st
     then mkResult "" (change_orders [] st)
@@ -158,13 +168,13 @@ refine (
 refine (
   match deserialize_packet pack with
   | Some p0 => _
-  | None => illegal_operation "Cannot understand package." st
+  | None => illegal_operation "Cannot understand package." st op
   end
 ).
 refine (
   match p0 with 
-  | p_RRQ _ => illegal_operation "Cannot send read requests to client." st
-  | p_WRQ _ => illegal_operation "Cannot send write requests to client." st
+  | p_RRQ _ => illegal_operation "Cannot send read requests to client." st op
+  | p_WRQ _ => illegal_operation "Cannot send write requests to client." st op
   | p_DATA nr data => _
   | p_ACK nr => _
   | p_ERROR _ err_msg => _
@@ -174,7 +184,7 @@ refine (
   refine (
     match transfer_mode st with
     | Read => _
-    | Write => illegal_operation "Cannot receive data in write mode." st
+    | Write => illegal_operation "Cannot receive data in write mode." st op
     end
   ).
   Local Close Scope positive_scope.
@@ -182,45 +192,45 @@ refine (
   refine (
     if nr =? last_block_id st + 1
       then _
-      else illegal_operation "Incorrect block number." st
+      else illegal_operation "Incorrect block number." st op
   ).
   refine (
-    if negb (N_of_nat (length data) =? 512)
-      then mkResult "" (mkState [WRITE_CONTENTS] Read (port st) 
-        (last_packet st) nr false true (file_contents st ++ data))
-      else let pac := (p_ACK nr) in
+    if N_of_nat (length data) =? 512
+      then let pac := p_ACK nr in
         mkResult (serialize_packet pac)
-          (mkState [SEND_PACKET] Read (port st) pac nr 
+          (mkState [SEND_PACKET] Read op pac nr 
               false false (file_contents st ++ data))
+      else mkResult "" (mkState [WRITE_CONTENTS] Read op
+        (last_packet st) nr false true (file_contents st ++ data))
   ).
 - (* p_ACK *)
   refine (
     match transfer_mode st with
-    | Read => illegal_operation "Cannot receive acknowledgments in read mode." st
+    | Read => illegal_operation "Cannot receive acknowledgments in read mode." st op
     | Write => _
     end
   ).
   refine (
     if nr =? last_block_id st
       then _
-      else illegal_operation "Incorrect block number." st
+      else illegal_operation "Incorrect block number." st op
   ).
   refine (
     match nr + 1 ?= two_bytes_range_size with
     | Lt => _
-    | _ => illegal_operation "File too large." st
+    | _ => illegal_operation "File too large." st op
     end
   ).
   refine (
     match N_of_nat (length (file_contents st)) ?= 512 with
-    | Lt => send_bytes st (length (file_contents st)) (nr + 1)
-    | _ => send_bytes st 512 (nr + 1)
+    | Lt => send_bytes st op (length (file_contents st)) (nr + 1)
+    | _ => send_bytes st op 512 (nr + 1)
     end
   ).
 - (* p_ERROR *)
   exact (
     mkResult err_msg
-      (mkState [PRINT] (transfer_mode st) (port st) (last_packet st) (last_block_id st) false true (file_contents st))
+      (mkState [PRINT] (transfer_mode st) op (last_packet st) (last_block_id st) false true (file_contents st))
   ).
 Defined.
 
@@ -266,14 +276,10 @@ rewrite PortOK...
 rewrite PacketData...
 rewrite ReadMode... 
 rewrite BlockIDOK...
-assert (negb (N.of_nat (length data) =? 512) = true) as PacketIndeedSmall.
-{ unfold negb.
-  cut (N.of_nat (length data) =? 512 = false).
-  { magics. rewrite H... }
-  Search (_ =? _).
-  apply (N.eqb_neq (N.of_nat (length data)) 512 ).
-  magics.
-}
+assert (N.of_nat (length data) =? 512 = false) as PacketIndeedSmall.
+{ magic.
+  apply (N.eqb_neq (N.of_nat (length data)) 512).
+  magics. }
 rewrite PacketIndeedSmall.
 magic.
 Qed.
@@ -324,13 +330,23 @@ destruct timeout.
   destruct (did_retransmit st).
   + magics.
   + magics. }
-destruct (port_is_bad st p).
+case_eq (port_is_bad st p).
 { magics. }
+intro.
+unfold port_is_bad in *...
+assert (p = old_port).
+{ rewrite PortWasSet in H.
+  rewrite (negb_false_iff _) in H.
+Local Open Scope positive_scope.
+  apply (Peqb_true_eq _ _).
+  assumption. }
+Local Open Scope N_scope.
+rewrite H0 in *...
 destruct (deserialize_packet pac)...
 destruct p0; magics;
 destruct (transfer_mode st); magics.
 * destruct (n =? last_block_id st + 1)...
-  destruct (negb (N.of_nat (length s) =? 512))...
+  destruct (N.of_nat (length s) =? 512)...
 * destruct (n =? last_block_id st)...
   destruct (n + 1)...
   - destruct (N.of_nat (length (file_contents st)) ?= 512)...
@@ -511,7 +527,7 @@ case_eq (num =? last_block_id st)...
 Qed.
 
 Theorem when_sending_data_new_last_block_id_is_the_same : forall pac st p p2 timeout,
-  normal_circumstances st p timeout -> 
+  normal_circumstances st p timeout ->
   transfer_mode st = Write ->
   let res := coq_process_packet pac st p timeout in
     deserialize_packet (packet_to_send res) = Some p2 ->
@@ -764,3 +780,33 @@ case_eq (num + 1 ?= two_bytes_range_size)...
   magics.
 Qed.
 
+Theorem none_port_changes_into_some : forall pac st p timeout,
+  port st = None -> 
+  normal_circumstances st p timeout -> 
+  exists p2, port (new_state (coq_process_packet pac st p timeout)) = Some p2.
+Proof with magic.
+intros pac st p timeout.
+intros NoPort Normals.
+destruct Normals as [NotFin [PortOK NoTimeout]].
+unfold coq_process_packet...
+rewrite NotFin...
+rewrite PortOK...
+rewrite NoTimeout...
+destruct (deserialize_packet pac)...
+2: exists p...
+destruct p0...
++ exists p...
++ exists p...
++ destruct (transfer_mode st)...
+  - destruct (n =? last_block_id st + 1)...
+    * destruct (N.of_nat (length s) =? 512); magic; exists p...
+    * exists p...
+  - exists p...
++ destruct (transfer_mode st)...
+  - exists p...
+  - destruct (n =? last_block_id st)...
+    * destruct (n + 1 ?= two_bytes_range_size); magic; exists p...
+      destruct (N.of_nat (length (file_contents st)) ?= 512); magic; exists p...
+    * exists p...
++ exists p...
+Qed.

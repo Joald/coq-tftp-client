@@ -47,8 +47,8 @@ Qed.
 
 Definition serialize_packet (p : packet) : string := 
   match p with
-  | p_RRQ filename => opcode_to_string RRQ ++ null_terminate filename ++ null_terminate "octet"
-  | p_WRQ filename => opcode_to_string WRQ ++ null_terminate filename ++ null_terminate "octet"
+  | p_RRQ filename => opcode_to_string RRQ ++ null_terminate filename ++ null_terminate "netascii"
+  | p_WRQ filename => opcode_to_string WRQ ++ null_terminate filename ++ null_terminate "netascii"
   | p_DATA block_no data => opcode_to_string DATA ++ word_no_to_string block_no ++ data
   | p_ACK block_no => opcode_to_string ACK ++ word_no_to_string block_no
   | p_ERROR err_code err_msg => opcode_to_string ERROR ++ err_code_to_string err_code ++ null_terminate err_msg

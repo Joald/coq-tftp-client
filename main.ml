@@ -1,3 +1,5 @@
+let std_out = stdout;;
+
 open Unix
 open Printf
 open Client
@@ -16,7 +18,15 @@ let char_to_nr c = Char.code c - Char.code '0';;
 
 let max_packet_len = 1024;;
 
-let unwrap opt = match opt with Some x -> x | None -> exit_err "bad option access";;
+let unwrap opt =
+  match opt with
+  | Some x -> x
+  | None -> exit_err "bad option access\n";;
+
+let default d opt =
+  match opt with
+  | Some x -> x
+  | None -> d;;
 
 (* Mutable state of the program *)
 
@@ -34,8 +44,8 @@ let local_file = ref None;; (* !local_file : file_descr *)
 
 let set_mode new_mode = 
   current_mode := match new_mode with
-    | "read"  -> Read
-    | "write" -> Write
+    | "read"  -> printf "mode: read\n"; Read
+    | "write" -> printf "mode: write\n"; Write
     | _       -> exit_err "invalid file mode: must be read or write"
 ;;
 
@@ -61,12 +71,13 @@ let implode (cl : char list) : string = String.concat "" (List.map (String.make 
 (* TODO: prove that port is always set if SEND_PACKET
          prove that length of orders is 1 or 0 *)
 let send_bytes (fd : file_descr) (addr : sockaddr) (pac : char list) =
-    let packet = implode pac in
+  let packet = implode pac in
     handle_unix_error sendto_substring fd packet 0 (String.length packet) [] addr;;
 
 let modify_port (addr : sockaddr) p : sockaddr =
     match addr with
-    | ADDR_INET (addr_inet, _) -> ADDR_INET (addr_inet, int_of_pos p);;
+    | ADDR_INET (addr_inet, _) -> ADDR_INET (addr_inet, int_of_pos p)
+    | _ -> exit_err "Invalid address type.";;
 
 let write_to_file (contents : char list) =
     handle_unix_error write_substring (unwrap !local_file) (implode contents) 0 (List.length contents);;
@@ -81,56 +92,57 @@ Definition coq_process_packet (pack : string) (st : state) (p : positive) (timeo
 coq_init (rw_mode : mode) (in_file : string) (out_file : string) : result
 *)
 
-let init : result = coq_init !current_mode (explode !in_file) (explode !out_file);;
+let init = lazy (
+  printf "in_file: %s, out_file: %s\n" !in_file !out_file;
+    coq_init !current_mode (explode !in_file) (explode !out_file));;
 
 let receive_response fd old_addr =
   let buffer = Bytes.create max_packet_len in
   try let (len, addr) = recvfrom fd buffer 0 max_packet_len [] in
     (addr, Bytes.sub_string buffer 0 len, false)
-  with Unix_error EAGAIN _ _ -> (old_addr, "", true);;
+  with Unix_error (EAGAIN, _, _) -> (old_addr, "", true);;
 
 let process_result (fd : file_descr) (addr : sockaddr) (res : result) =
-  let st = new_state res in
+  let st = res.new_state in
   List.iter (
-    fun order -> match order with
-      | SEND_PACKET -> send_bytes fd (modify_port addr (unwrap (port st))) (packet_to_send res)
-      | WRITE_CONTENTS -> write_to_file (file_contents st)
-      | PRINT -> printf (implode (packet_to_send res))
-      | SEND_TO p -> send_bytes fd (modify_port addr p) (packet_to_send res)
-    ) (orders st);
+    fun order -> ignore (match order with
+      | SEND_PACKET    -> send_bytes fd (modify_port addr (default (pos_of_int 69) st.port)) res.packet_to_send
+      | WRITE_CONTENTS -> write_to_file st.file_contents
+      | PRINT          -> printf "PRINTING: %s\n" (implode res.packet_to_send); 0
+      | SEND_TO p      -> send_bytes fd (modify_port addr p) res.packet_to_send
+    )) st.orders;
   st;;
 
-let main_loop (fd : file_descr) (addr : sockaddr) (st : state)  =
-    if not (finished st) then
+let rec main_loop (fd : file_descr) (addr : sockaddr) (st : state)  =
+  if not st.finished then begin
+    printf "Main loop!!\nThe port is %d\n" (int_of_pos (default (pos_of_int 666) st.port));
+    flush std_out;
     let (rec_addr, pac, timeout) = handle_unix_error receive_response fd addr in
-    let res = coq_process_packet (explode pac) (BinPos.of_int (sockaddr_to_port rec_addr)) timeout in
-    main_loop fd addr (process_result fd addr res);;
+    let res = coq_process_packet (explode pac) st (pos_of_int (sockaddr_to_port rec_addr)) timeout in
+      main_loop fd addr (process_result fd addr res)
+  end;;
 
-let run_client info = 
-  (* type addr_info = { 
-     ai_family : socket_domain; 
-     ai_socktype : socket_type; 
-     ai_protocol : int; 
-     ai_addr : sockaddr; 
-     ai_canonname : string } *)
+let run_client info =
   let sock_fd = handle_unix_error socket info.ai_family info.ai_socktype info.ai_protocol in
     setsockopt_float sock_fd SO_RCVTIMEO 1.0;
-    main_loop sock_fd (ai_addr info) (process_result sock_fd (ai_addr info) init);
-    ;;
+    let init_st = process_result sock_fd info.ai_addr (Lazy.force init) in
+    main_loop sock_fd info.ai_addr init_st;;
 
-let main () = 
+let main () =
+  if Array.length Sys.argv <> 9 then exit_err "Wrong number of arguments!" else
   Arg.parse args (fun _ -> ()) "A simple TFTP client written in Coq written by Jacek Olczyk.";
-  (*if !port < 0 || 65536 < !port then exit_err In*)
-  if !mode = Read then 
+  if !current_mode = Read then
     assign_opt local_file (handle_unix_error openfile !out_file [O_WRONLY; O_CREAT; O_EXCL] 0o755)
   else begin
     assign_opt local_file (handle_unix_error openfile !in_file [O_RDONLY] 0);
     let max_file_len = 512 * 256 * 256 + 1 in
     let buf = Bytes.create max_file_len in
-    handle_unix_error read (unwrap local_file) buf 0 max_file_len;
+    ignore (handle_unix_error read (unwrap !local_file) buf 0 max_file_len);
     in_file := Bytes.to_string buf
   end;
-  let addr_list = handle_unix_error getaddrinfo !address 69
+  printf "File opened!\n";
+  let addr_list = handle_unix_error getaddrinfo !address "69"
                     [AI_FAMILY PF_INET; AI_SOCKTYPE SOCK_DGRAM] in
-    run_client (head addr_list)
+    run_client (List.hd addr_list)
 ;;
+main ();;
