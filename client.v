@@ -121,10 +121,10 @@ Open Scope program_scope.
 Definition request_retransmit (st : state) : result := 
   if did_retransmit st
     then mkResult "The server timed out." 
-      ((change_orders [PRINT] \u2218 change_did_retransmit true \u2218 change_finished true \u2218 change_file_contents "") st)
+      ((change_orders [PRINT] ∘ change_did_retransmit true ∘ change_finished true ∘ change_file_contents "") st)
     else mkResult 
       (serialize_packet (last_packet st))
-      ((change_orders [PRINT] \u2218 change_did_retransmit true) st).
+      ((change_orders [PRINT] ∘ change_did_retransmit true) st).
 
 Definition send_bytes (st : state) (p : option positive) (byte_count : nat) (new_id : N) : result :=
   let to_send := substring 0 byte_count (file_contents st) in
